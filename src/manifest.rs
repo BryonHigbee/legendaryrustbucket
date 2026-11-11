@@ -579,6 +579,119 @@ mod tests{
         *chunk.last_mut().unwrap()^=1;
         assert!(decode_chunk_with_secrets(&chunk,&expected,&secrets).is_err());
     }
+
+    fn fstring(buf:&mut Vec<u8>,s:&str) {
+        if s.is_empty() {buf.extend_from_slice(&0u32.to_le_bytes());return;}
+        buf.extend_from_slice(&((s.len()+1) as u32).to_le_bytes());
+        buf.extend_from_slice(s.as_bytes());buf.push(0);
+    }
+    fn finish_section(buf:&mut [u8]) {let len=buf.len() as u32;buf[..4].copy_from_slice(&len.to_le_bytes());}
+    fn meta(feature:u32,encrypted:bool)->Vec<u8>{
+        let mut section=vec![0u8;4];
+        section.push(0);
+        section.extend_from_slice(&feature.to_le_bytes());
+        section.push(0);
+        section.extend_from_slice(&0u32.to_le_bytes());
+        fstring(&mut section,"Sugar");
+        fstring(&mut section,"unit-test");
+        fstring(&mut section,if encrypted {""} else {"Binaries/Win64/RocketLeague.exe"});
+        fstring(&mut section,"");
+        section.extend_from_slice(&0u32.to_le_bytes());
+        for _ in 0..3 {fstring(&mut section,"");}
+        finish_section(&mut section);
+        section
+    }
+    fn file_list(encrypted:bool)->Vec<u8>{
+        let mut section=vec![0u8;4];
+        section.push(0);
+        section.extend_from_slice(&1u32.to_le_bytes());
+        fstring(&mut section,if encrypted {""} else {"Binaries/Win64/RocketLeague.exe"});
+        fstring(&mut section,"");
+        section.extend_from_slice(&sha1_bytes(&[]));
+        section.push(0);
+        section.extend_from_slice(&0u32.to_le_bytes());
+        section.extend_from_slice(&0u32.to_le_bytes());
+        finish_section(&mut section);
+        section
+    }
+    fn manifest_bytes(body:&[u8],feature:u32,encrypted:bool,secret:Guid,tag:&[u8;16])->Vec<u8>{
+        let mut bytes=Vec::new();
+        bytes.extend_from_slice(&MANIFEST_MAGIC.to_le_bytes());
+        bytes.extend_from_slice(&(if encrypted {73u32} else {41u32}).to_le_bytes());
+        bytes.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&sha1_bytes(body));
+        bytes.push(if encrypted {2} else {0});
+        bytes.extend_from_slice(&feature.to_le_bytes());
+        if encrypted{bytes.extend_from_slice(&secret);bytes.extend_from_slice(tag);}
+        bytes.extend_from_slice(body);
+        bytes
+    }
+    fn custom_fields_empty()->Vec<u8>{
+        let mut section=vec![0u8;4];section.push(0);
+        section.extend_from_slice(&0u32.to_le_bytes());
+        finish_section(&mut section);section
+    }
+    #[test]
+    fn binary_manifest_parser_reads_unencrypted_game_metadata(){
+        let mut body=meta(18,false);
+        let mut chunks=vec![0u8;4];chunks.push(0);chunks.extend_from_slice(&0u32.to_le_bytes());
+        finish_section(&mut chunks);
+        body.extend_from_slice(&chunks);
+        body.extend_from_slice(&file_list(false));
+        body.extend_from_slice(&custom_fields_empty());
+        let raw=manifest_bytes(&body,18,false,[0;16],&[0;16]);
+        let parsed=parse(&raw).unwrap();
+        assert_eq!(parsed.app_name,"Sugar");
+        assert_eq!(parsed.files[0].name,"Binaries/Win64/RocketLeague.exe");
+    }
+    #[test]
+    fn encrypted_binary_manifest_metadata_roundtrip(){
+        let key=[6u8;32];let nonce=[8u8;12];let secret=[1u8;16];
+        let mut plaintext=Vec::new();
+        fstring(&mut plaintext,"Binaries/Win64/RocketLeague.exe");
+        fstring(&mut plaintext,"");
+        plaintext.extend_from_slice(&0u32.to_le_bytes());
+        for _ in 0..5{fstring(&mut plaintext,"");}
+        fstring(&mut plaintext,"Binaries/Win64/RocketLeague.exe");
+        fstring(&mut plaintext,"");
+        let mut ciphertext=plaintext.clone();
+        let cipher=Aes256Gcm::new_from_slice(&key).unwrap();
+        let tag=cipher.encrypt_in_place_detached(Nonce::from_slice(&nonce),b"",&mut ciphertext).unwrap();
+        let mut body=meta(24,true);
+        let mut chunks=vec![0u8;4];chunks.push(0);chunks.extend_from_slice(&0u32.to_le_bytes());
+        finish_section(&mut chunks);
+        body.extend_from_slice(&chunks);
+        body.extend_from_slice(&file_list(true));
+        body.extend_from_slice(&custom_fields_empty());
+
+        let mut encrypted=vec![0u8;4];
+        encrypted.push(0);
+        let cipher_start=encrypted.len();
+        encrypted.extend_from_slice(&0u32.to_le_bytes());
+        let header_start=encrypted.len();
+        encrypted.extend_from_slice(&0u32.to_le_bytes());
+        encrypted.extend_from_slice(&0u32.to_le_bytes());
+        encrypted.push(0);
+        encrypted.extend_from_slice(&(plaintext.len() as u32).to_le_bytes());
+        encrypted.extend_from_slice(&(plaintext.len() as u32).to_le_bytes());
+        encrypted.extend_from_slice(&(nonce.len() as u32).to_le_bytes());
+        encrypted.extend_from_slice(&nonce);
+        let header_len=(encrypted.len()-header_start) as u32;
+        encrypted[header_start..header_start+4].copy_from_slice(&header_len.to_le_bytes());
+        encrypted.extend_from_slice(&(ciphertext.len() as u32).to_le_bytes());
+        encrypted.extend_from_slice(&ciphertext);
+        let cipher_len=(encrypted.len()-cipher_start) as u32;
+        encrypted[cipher_start..cipher_start+4].copy_from_slice(&cipher_len.to_le_bytes());
+        finish_section(&mut encrypted);
+        body.extend_from_slice(&encrypted);
+        let raw=manifest_bytes(&body,24,true,secret,tag.as_slice().try_into().unwrap());
+        let mut secrets=Secrets::new();secrets.insert(guid_hex(secret),hex::encode(key));
+        let parsed=parse_with_secrets(&raw,&secrets).unwrap();
+        assert_eq!(parsed.launch_exe,"Binaries/Win64/RocketLeague.exe");
+        assert_eq!(parsed.files[0].name,"Binaries/Win64/RocketLeague.exe");
+        assert!(parse(&raw).is_err());
+    }
     #[test] fn invalid_chunk_rejected(){
         let info=ChunkInfo{guid:[0;16],secret_guid:[0;16],hash:0,sha:[0;20],size:1024,url_path:"x".into()};
         assert!(decode_chunk(b"random",&info).is_err());
