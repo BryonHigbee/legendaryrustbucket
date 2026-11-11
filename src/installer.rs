@@ -7,7 +7,7 @@ use rayon::prelude::*;
 use reqwest::blocking::Client;
 use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
