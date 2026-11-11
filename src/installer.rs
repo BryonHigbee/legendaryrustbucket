@@ -264,7 +264,8 @@ pub fn install(options:InstallOptions)->Result<(),String>{
     fs::rename(&index_tmp,&index_path).map_err(|e|e.to_string())?;
     let registered=store::InstalledGame{
         app_name:plan.app_name.clone(),title:"Rocket League".into(),install_path:root.clone(),
-        executable:game_exe,namespace:plan.namespace,platform:"Windows".into()
+        executable:game_exe,namespace:plan.namespace,platform:"Windows".into(),
+        deployment_id:plan.deployment_id
     };
     store::register(registered)?;
     // Cache is retained only if cleanup fails. Interrupted installs keep cache for resumes.

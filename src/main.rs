@@ -104,6 +104,7 @@ fn register(args: &[String]) -> Result<(), String> {
         install_path: PathBuf::from(required(args, "--path")?),
         executable: PathBuf::from(required(args, "--exe")?),
         namespace: required(args, "--namespace")?,
+        deployment_id: None,
         platform: get_flag(args, "--platform")?.unwrap_or_else(|| "Windows".into()),
     };
     if !matches!(game.platform.as_str(), "Windows" | "Linux") {
@@ -237,6 +238,12 @@ fn launch(args: &[String]) -> Result<(), String> {
         "-epiclocale=en".to_string(),
         format!("-epicsandboxid={}", game.namespace),
     ]);
+    if let Some(id)=game.deployment_id.as_deref() {
+        if id.is_empty() || !id.chars().all(|c|c.is_ascii_alphanumeric()||c=='-') {
+            return Err("Invalid Epic deployment ID in LRB game metadata".into());
+        }
+        command.arg(format!("-epicdeploymentid={id}"));
+    }
     let child = command.spawn().map_err(|err| format!("Unable to launch game: {err}"))?;
     println!("Game process started (PID {}). Launcher exiting.", child.id());
     Ok(())

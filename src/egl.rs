@@ -96,6 +96,7 @@ fn decode_manifest(data: &[u8], path_override: Option<&Path>) -> Result<Option<I
         install_path,
         executable,
         namespace: manifest.namespace,
+        deployment_id: None,
         platform: "Windows".into(),
     }))
 }

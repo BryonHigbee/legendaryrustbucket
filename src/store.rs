@@ -10,6 +10,8 @@ pub struct InstalledGame {
     pub install_path: PathBuf,
     pub executable: PathBuf,
     pub namespace: String,
+    #[serde(default)]
+    pub deployment_id: Option<String>,
     #[serde(default = "default_platform")]
     pub platform: String,
 }
@@ -108,7 +110,7 @@ mod tests {
 
     #[test]
     fn game_matching_is_case_insensitive() {
-        let game = InstalledGame { app_name: "Sugar".into(), title: "Rocket League".into(), install_path: "/tmp".into(), executable: "file.exe".into(), namespace: "ns".into(), platform: "Windows".into() };
+        let game = InstalledGame { app_name: "Sugar".into(), title: "Rocket League".into(), install_path: "/tmp".into(), executable: "file.exe".into(), namespace: "ns".into(), platform: "Windows".into(), deployment_id: None };
         let games = [game];
         assert!(find_game(&games, "rocket league").is_ok());
         assert!(find_game(&games, "sugar").is_ok());
@@ -123,7 +125,7 @@ mod tests {
 
     #[test]
     fn rejects_relative_traversal_before_touching_disk() {
-        let game = InstalledGame { app_name: "x".into(), title: "x".into(), install_path: "/this/must/not/exist".into(), executable: "../private.exe".into(), namespace: "ns".into(), platform: "Windows".into() };
+        let game = InstalledGame { app_name: "x".into(), title: "x".into(), install_path: "/this/must/not/exist".into(), executable: "../private.exe".into(), namespace: "ns".into(), platform: "Windows".into(), deployment_id: None };
         assert!(executable_path(&game).is_err());
     }
 }

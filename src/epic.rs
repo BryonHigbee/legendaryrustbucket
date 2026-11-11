@@ -211,6 +211,17 @@ pub struct DownloadPlan {
     pub secrets: crate::manifest::Secrets,
     pub app_name: String,
     pub namespace: String,
+    pub deployment_id: Option<String>,
+}
+
+fn deployment_from_manifest(element:&Value)->Option<String>{
+    let config=element.get("sidecar")?.get("config")?;
+    let config=if let Some(raw)=config.as_str(){
+        serde_json::from_str::<Value>(raw).ok()?
+    }else{config.clone()};
+    config.get("deploymentId").and_then(Value::as_str)
+        .filter(|s|!s.is_empty()&&s.chars().all(|c|c.is_ascii_alphanumeric()||c=='-'))
+        .map(str::to_owned)
 }
 
 pub fn download_plan(selector: &str) -> Result<DownloadPlan, String> {
@@ -260,6 +271,7 @@ pub fn download_plan(selector: &str) -> Result<DownloadPlan, String> {
     if element.get("isPreloaded").and_then(Value::as_bool)==Some(true) {
         return Err("Epic reports a preloaded but not yet released build; installation is blocked".into());
     }
+    let deployment_id=deployment_from_manifest(element);
     let expected_hash=element.get("hash").and_then(Value::as_str)
         .ok_or("Manifest API did not supply a SHA-1 hash")?.to_ascii_lowercase();
     let manifests=element.get("manifests").and_then(Value::as_array)
@@ -311,7 +323,18 @@ pub fn download_plan(selector: &str) -> Result<DownloadPlan, String> {
             return Err("Epic manifest AppName differs from authenticated asset".into());
         }
         if bases.is_empty() {return Err("No chunk CDN base URL was returned".into());}
-        return Ok(DownloadPlan{manifest,bases,raw_manifest:bytes,secrets,app_name,namespace});
+        return Ok(DownloadPlan{manifest,bases,raw_manifest:bytes,secrets,app_name,namespace,deployment_id});
     }
     Err(format!("Could not retrieve a valid Epic game manifest: {}",errors.join("; ")))
+}
+
+#[cfg(test)]
+mod deployment_tests {
+    use super::*;
+    #[test] fn reads_epic_deployment_id_from_sidecar(){
+        let element=serde_json::json!({"sidecar":{"config":"{\"deploymentId\":\"abcd-1234\"}"}});
+        assert_eq!(deployment_from_manifest(&element),Some("abcd-1234".into()));
+        let unsafe_id=serde_json::json!({"sidecar":{"config":"{\"deploymentId\":\"hello world\"}"}});
+        assert_eq!(deployment_from_manifest(&unsafe_id),None);
+    }
 }

@@ -101,7 +101,7 @@ lrb launch --app "Rocket League"
 
 On Windows, use a Windows directory path for `--path`. On Linux, the native launcher will attempt to spawn Windows executables via the `wine` binary in `PATH`; set `LRB_WINE` or use `--wine /path/to/wine` to choose the runtime. File paths and executable names vary by installation. `verify` only checks the executable exists; it **is not** a content-integrity check.
 
-The launch command requests an Epic exchange code and supplies standard Epic launch parameters without touching the game or anti-cheat. **Whether Rocket League successfully connects online through this flow remains untested**, particularly in Wine/Proton environments.
+The launch command requests an Epic exchange code and supplies standard Epic launch parameters. When present, the Epic manifest sidecar deployment ID is also passed to the game. It does not touch game binaries or anti-cheat. **Whether Rocket League successfully connects online through this flow remains untested**, particularly in Wine/Proton environments.
 
 ## Check Rocket League online-launch prerequisites (experimental)
 
