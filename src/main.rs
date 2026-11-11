@@ -1,6 +1,7 @@
 //! LRB: Rust-native launcher foundation. Never starts Python or Legendary.
 mod epic;
 mod egl;
+mod eac;
 mod installer;
 mod manifest;
 mod network;
@@ -12,7 +13,7 @@ use std::process::{Command, ExitCode};
 use store::InstalledGame;
 
 const HELP: &str = "\
-LRB — LegendaryRustBucket v0.6.0 (100% Rust launcher foundation)
+LRB — LegendaryRustBucket v0.6.1 (100% Rust launcher foundation)
 
 Usage:
   lrb help
@@ -27,6 +28,8 @@ Usage:
   lrb import-egl [--manifest FILE | --dir DIR] [--path DIR] [--replace]
                                    Import an existing Epic installation
   lrb register --app ID --title NAME --path DIR --exe RELATIVE_EXE --namespace ID [--platform Windows|Linux]
+  lrb eac status [--app ID_OR_TITLE] Check Rocket League EAC files and Windows service
+  lrb eac install [--app ID_OR_TITLE] Install official Rocket League EAC service (Administrator)
   lrb launch [--app ID_OR_TITLE] [--wine WINE_PATH] [--dry-run]
   lrb verify [--app ID_OR_TITLE]   Check registered executable (not full file verification)
   lrb online-check [--app ID_OR_TITLE]  Validate local install, Epic OAuth and launch-token issuance
@@ -49,6 +52,7 @@ Environment:
 Notes:
   --app defaults to Rocket League. LRB doesn't patch game files, EAC, or network traffic.
   Epic HTTP integration requires a live authorized account to validate in practice.
+  Rocket League online play requires EAC; check with 'lrb eac status'.
 ";
 
 fn get_flag(args: &[String], flag: &str) -> Result<Option<String>, String> {
@@ -223,6 +227,9 @@ fn launch(args: &[String]) -> Result<(), String> {
         println!("No game was launched. No online authentication was attempted.");
         return Ok(());
     }
+    // EAC installation is privileged and requires explicit user action.
+    // Validate local service before requesting an Epic game exchange code.
+    eac::require_for_online_launch(&game)?;
     let session = epic::refreshed_session()?;
     let code = epic::game_exchange_token(&session)?;
     let (user_id, display_name) = epic::session_identity(&session);
@@ -259,7 +266,7 @@ fn run() -> Result<(), String> {
         "help" | "--help" | "-h" => { println!("{HELP}"); Ok(()) }
         "doctor" => {
             allowed_flags(rest, &[], &[])?;
-            println!("LRB v0.6.0 / OS {} / Rust-native: yes", std::env::consts::OS);
+            println!("LRB v0.6.1 / OS {} / Rust-native: yes", std::env::consts::OS);
             println!("Data: {}", store::data_dir()?.display());
             println!("Registered games: {}", store::load_installed()?.len());
             println!("Epic online login present: {}", epic::load_session().is_ok());
@@ -286,6 +293,24 @@ fn run() -> Result<(), String> {
         "import-egl" => import_egl(rest),
         "online-check" => online_check(rest),
         "net-probe" => net_probe(rest),
+        "eac" => {
+            if rest.iter().any(|a| a == "--help") {
+                println!("Use: lrb eac status [--app Rocket League] | lrb eac install [--app Rocket League]");
+                println!("The install action invokes only the game's official EAC setup. Open an Administrator Command Prompt.");
+                Ok(())
+            } else {
+                let (action, options) = rest.split_first().ok_or(
+                    "Use: lrb eac status | lrb eac install"
+                )?;
+                allowed_flags(options, &["--app"], &[])?;
+                let game = select_game(options)?;
+                match action.as_str() {
+                    "status" => eac::status(&game),
+                    "install" => eac::install(&game),
+                    _ => Err("Use: lrb eac status | lrb eac install".into()),
+                }
+            }
+        },
         "launch" => launch(rest),
         "verify" => {
             allowed_flags(rest, &["--app"], &["--full"])?;

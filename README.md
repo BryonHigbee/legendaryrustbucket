@@ -23,7 +23,7 @@ cargo run -- doctor
 
 The resulting binary is `target/release/lrb` (Linux) or `target/release/lrb.exe` (Windows). Dependencies are Rust crates from crates.io, not the Python Legendary launcher.
 
-## Native Rocket League install, update, verify, repair (v0.6.0, experimental)
+## Native Rocket League install, update, verify, repair (v0.6.1, experimental)
 
 With an authenticated Epic account, LRB now requests the Windows Rocket League assets
 and a signed BuildPatch manifest, validates its SHA-1, parses supported JSON/binary and AES-256-GCM encrypted
@@ -49,8 +49,8 @@ are absent from a new manifest. The chunk cache is removed after success.
 
 **Known limitations:** AES-256-GCM encrypted BuildPatch manifests and chunks are supported using Epic-provided keys in memory; unknown or unauthenticated formats are rejected (rather than
 silently corrupted); installation API responses and Rocket League gameplay still
-require real-account end-to-end testing. Selective install tags, prerequisite installers,
-file-deletion patch optimizations, anti-cheat initialization and Epic ownership-token
+require real-account end-to-end testing. Selective install tags, prerequisite installers beyond the explicit EAC service setup,
+file-deletion patch optimizations, end-to-end anti-cheat initialization and Epic ownership-token
 flows are not complete. It is an experimental installer, not a production replacement.
 
 ### Epic manifest internal-name mismatch
@@ -113,6 +113,43 @@ lrb launch --app "Rocket League"
 On Windows, use a Windows directory path for `--path`. On Linux, the native launcher will attempt to spawn Windows executables via the `wine` binary in `PATH`; set `LRB_WINE` or use `--wine /path/to/wine` to choose the runtime. File paths and executable names vary by installation. `verify` only checks the executable exists; it **is not** a content-integrity check.
 
 The launch command requests an Epic exchange code and supplies standard Epic launch parameters. When present, the Epic manifest sidecar deployment ID is also passed to the game. It does not touch game binaries or anti-cheat. **Whether Rocket League successfully connects online through this flow remains untested**, particularly in Wine/Proton environments.
+
+## Rocket League Easy Anti-Cheat (EAC) on Windows
+
+Rocket League requires Easy Anti-Cheat for online matchmaking. Epic's standard
+Windows launcher installs the anti-cheat service separately during game setup.
+LRB's experimental native BuildPatch installer does not silently perform
+privileged service installation. Instead, **the user explicitly authorizes it**:
+
+```bat
+lrb verify --full
+lrb eac status
+:: Open Command Prompt as Administrator for the next command:
+lrb eac install
+lrb eac status
+lrb launch
+```
+
+LRB looks for the **official, game-bundled**
+`Binaries\Win64\EasyAntiCheat\EasyAntiCheat_EOS_Setup.exe` (or the
+`EasyAntiCheat_EOS` directory variant), verifies that `Settings.json`
+declares Rocket League's official EAC ProductId, and runs the executable with
+`install e6bcca5b37d0457ca881aec508205542`. LRB checks Windows service
+registration after the command returns. A service may be **STOPPED** when
+Rocket League isn't running; this is normal and doesn't mean it isn't installed.
+
+`lrb launch` on Windows checks the EAC prerequisites before requesting a game
+token and warns if the official service is missing. `lrb launch --dry-run`
+never runs the installer or contacts Epic. This does **not** bypass EAC,
+modify game files, or guarantee online matchmaking.
+
+If files or the settings file are missing, use `lrb repair` and retry.
+If Windows service installation fails, run the terminal as Administrator.
+Epic cautions that some installations may need to be on the same drive as
+Windows because of registry/permissions issues.
+
+Official instructions: [Install Easy Anti-Cheat for Rocket League]
+(https://www.epicgames.com/help/c-37599050/a18535670).
 
 ## Check Rocket League online-launch prerequisites (experimental)
 

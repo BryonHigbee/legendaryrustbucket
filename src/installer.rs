@@ -272,7 +272,7 @@ pub fn install(options:InstallOptions)->Result<(),String>{
     if let Err(e)=fs::remove_dir_all(&cache) {
         eprintln!("Warning: completed, but chunk cache cleanup failed: {e}");
     }
-    println!("Installed/updated {} build {}. Next: lrb verify --full; lrb online-check",
+    println!("Installed/updated {} build {}. Next: lrb verify --full; lrb eac install; lrb online-check",
         plan.app_name,plan.manifest.version);
     Ok(())
 }

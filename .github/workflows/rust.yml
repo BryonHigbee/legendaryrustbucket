@@ -37,6 +37,8 @@ jobs:
         run: cargo run -- install --help
       - name: Native update CLI smoke test (help only)
         run: cargo run -- update --help
+      - name: EAC diagnostic CLI help smoke test
+        run: cargo run -- eac --help
       - name: No Python source or bridge
         shell: bash
         run: |
