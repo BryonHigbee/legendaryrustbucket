@@ -1,1 +1,3 @@
-*.rs linguist-language=Rust
+# GitHub Linguist: count native Rust source in repository language statistics.
+# Explicitly mark it as detectable, non-generated application code.
+*.rs linguist-language=Rust linguist-detectable=true linguist-generated=false linguist-documentation=false linguist-vendored=false
