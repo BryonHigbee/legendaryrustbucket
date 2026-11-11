@@ -292,7 +292,7 @@ fn parse_binary(data:&[u8], secrets:&Secrets)->Result<Manifest,String>{
     for i in 0..count {
         if sizes[i]==0 || sizes[i] as usize>MAX_CHUNK{return Err("Unsupported chunk window size".into());}
         let item=ChunkInfo{guid:guid[i],secret_guid:chunk_secret_guids[i],hash:hash[i],sha:sha[i],size:sizes[i],
-            url_path:chunk_path(feature,groups[i],hash[i],guid[i],secrets[i])};
+            url_path:chunk_path(feature,groups[i],hash[i],guid[i],chunk_secret_guids[i])};
         if chunks.insert(guid[i],item).is_some(){return Err("Duplicate Epic chunk GUID".into());}
     }
 
