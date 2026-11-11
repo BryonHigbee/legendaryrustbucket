@@ -224,8 +224,35 @@ fn deployment_from_manifest(element:&Value)->Option<String>{
         .map(str::to_owned)
 }
 
-pub fn download_plan(selector: &str) -> Result<DownloadPlan, String> {
+/// A BuildPatch manifest's internal AppNameString is not necessarily the
+/// Epic launcher asset's appName. The authenticated assets/v2 response provides
+/// the expected manifest hash, which is our integrity/identity binding.
+fn parse_asset_manifest(
+    asset_app_name: &str,
+    expected_sha1: &str,
+    raw: &[u8],
+    secrets: &crate::manifest::Secrets,
+) -> Result<crate::manifest::Manifest, String> {
     use sha1::{Digest, Sha1};
+    if expected_sha1.len() != 40 || !expected_sha1.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("Epic manifest API supplied an invalid SHA-1 hash".into());
+    }
+    let actual_hash = hex::encode(Sha1::digest(raw));
+    if actual_hash != expected_sha1.to_ascii_lowercase() {
+        return Err("CDN manifest SHA-1 mismatch".into());
+    }
+    let manifest = crate::manifest::parse_with_secrets(raw, secrets)?;
+    if !manifest.app_name.is_empty() && !manifest.app_name.eq_ignore_ascii_case(asset_app_name) {
+        eprintln!(
+            "LRB: Epic asset {:?} uses internal BuildPatch name {:?}; accepted after validating Epic-provided manifest SHA-1.",
+            asset_app_name,
+            manifest.app_name
+        );
+    }
+    Ok(manifest)
+}
+
+pub fn download_plan(selector: &str) -> Result<DownloadPlan, String> {
     use std::io::Read;
     let session = refreshed_session()?;
     let client = http_client()?;
@@ -316,12 +343,12 @@ pub fn download_plan(selector: &str) -> Result<DownloadPlan, String> {
         if limited.read_to_end(&mut bytes).is_err() || bytes.len()>128*1024*1024 {
             errors.push("CDN manifest response too large or unreadable".into());continue;
         }
-        let actual=hex::encode(Sha1::digest(&bytes));
-        if actual!=expected_hash {errors.push("CDN manifest SHA-1 mismatch".into());continue;}
-        let manifest=crate::manifest::parse_with_secrets(&bytes,&secrets)?;
-        if !manifest.app_name.is_empty() && !manifest.app_name.eq_ignore_ascii_case(&app_name) {
-            return Err("Epic manifest AppName differs from authenticated asset".into());
-        }
+        // The authenticated assets/v2 response binds this download by its
+        // SHA-1; AppNameString in the BuildPatch metadata is not an asset key.
+        let manifest=match parse_asset_manifest(&app_name,&expected_hash,&bytes,&secrets) {
+            Ok(manifest)=>manifest,
+            Err(err)=>{errors.push(err);continue;},
+        };
         if bases.is_empty() {return Err("No chunk CDN base URL was returned".into());}
         return Ok(DownloadPlan{manifest,bases,raw_manifest:bytes,secrets,app_name,namespace,deployment_id});
     }
@@ -336,5 +363,57 @@ mod deployment_tests {
         assert_eq!(deployment_from_manifest(&element),Some("abcd-1234".into()));
         let unsafe_id=serde_json::json!({"sidecar":{"config":"{\"deploymentId\":\"hello world\"}"}});
         assert_eq!(deployment_from_manifest(&unsafe_id),None);
+    }
+}
+
+/// Regression for Rocket League: Epic asset appName can differ from BuildPatch
+/// AppNameString. No network or credentials are needed for this test.
+#[cfg(test)]
+mod asset_manifest_identity_tests {
+    use super::*;
+    use sha1::{Digest, Sha1};
+
+    fn fixture(inner_app: &str) -> Vec<u8> {
+        serde_json::json!({
+            "ManifestFileVersion": "018000000000",
+            "AppNameString": inner_app,
+            "BuildVersionString": "fixture",
+            "LaunchExeString": "Binaries/Win64/RocketLeague.exe",
+            "ChunkFilesizeList": {},
+            "ChunkHashList": {},
+            "ChunkShaList": {},
+            "DataGroupList": {},
+            "FileManifestList": [{
+                "Filename": "Binaries/Win64/RocketLeague.exe",
+                "FileHash": "000".repeat(20),
+                "FileChunkParts": []
+            }]
+        }).to_string().into_bytes()
+    }
+
+    #[test]
+    fn different_internal_name_is_allowed_for_authenticated_manifest() {
+        let raw=fixture("RocketLeague");
+        let sha=hex::encode(Sha1::digest(&raw));
+        let parsed=parse_asset_manifest("Sugar",&sha,&raw,&crate::manifest::Secrets::new()).unwrap();
+        assert_eq!(parsed.app_name,"RocketLeague");
+    }
+
+    #[test]
+    fn correct_internal_name_works_too() {
+        let raw=fixture("Sugar");
+        let sha=hex::encode(Sha1::digest(&raw));
+        let parsed=parse_asset_manifest("Sugar",&sha,&raw,&crate::manifest::Secrets::new()).unwrap();
+        assert_eq!(parsed.app_name,"Sugar");
+    }
+
+    #[test]
+    fn tampered_or_unexpected_manifest_hash_is_rejected_even_if_name_matches() {
+        let raw=fixture("Sugar");
+        let mut tampered=raw.clone();
+        tampered.push(b' ');
+        let sha=hex::encode(Sha1::digest(&raw));
+        assert!(parse_asset_manifest("Sugar",&sha,&tampered,&crate::manifest::Secrets::new()).is_err());
+        assert!(parse_asset_manifest("Sugar","not-a-sha1",&raw,&crate::manifest::Secrets::new()).is_err());
     }
 }

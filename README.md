@@ -53,6 +53,17 @@ require real-account end-to-end testing. Selective install tags, prerequisite in
 file-deletion patch optimizations, anti-cheat initialization and Epic ownership-token
 flows are not complete. It is an experimental installer, not a production replacement.
 
+### Epic manifest internal-name mismatch
+
+An authenticated Epic game asset can have a different launcher app name (for
+example, `Sugar`) from its BuildPatch `AppNameString`. LRB accepts this
+difference **only after verifying the downloaded bytes against the manifest
+SHA-1 supplied by Epic's authenticated manifest API**. An invalid hash remains
+a hard failure. If an older LRB build says
+`Epic manifest AppName differs from authenticated asset`, update the checkout
+with `git pull origin master` and reinstall using
+`cargo install --path . --force`.
+
 ## Epic sign-in and library (experimental)
 
 ```bash
