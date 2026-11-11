@@ -12,7 +12,7 @@ use std::process::{Command, ExitCode};
 use store::InstalledGame;
 
 const HELP: &str = "\
-LRB — LegendaryRustBucket v0.5.0 (100% Rust launcher foundation)
+LRB — LegendaryRustBucket v0.6.0 (100% Rust launcher foundation)
 
 Usage:
   lrb help
@@ -252,11 +252,11 @@ fn run() -> Result<(), String> {
         "help" | "--help" | "-h" => { println!("{HELP}"); Ok(()) }
         "doctor" => {
             allowed_flags(rest, &[], &[])?;
-            println!("LRB v0.5.0 / OS {} / Rust-native: yes", std::env::consts::OS);
+            println!("LRB v0.6.0 / OS {} / Rust-native: yes", std::env::consts::OS);
             println!("Data: {}", store::data_dir()?.display());
             println!("Registered games: {}", store::load_installed()?.len());
             println!("Epic online login present: {}", epic::load_session().is_ok());
-            println!("Native BuildPatch installer/update/repair: implemented (encrypted payloads not yet supported). Online gameplay: not validated.");
+            println!("Native BuildPatch installer/update/repair: implemented with AES-GCM support. Online gameplay: not validated.");
             Ok(())
         }
         "auth" => match rest {

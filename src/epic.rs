@@ -208,6 +208,7 @@ pub struct DownloadPlan {
     pub manifest: crate::manifest::Manifest,
     pub bases: Vec<String>,
     pub raw_manifest: Vec<u8>,
+    pub secrets: crate::manifest::Secrets,
     pub app_name: String,
     pub namespace: String,
 }
@@ -263,6 +264,14 @@ pub fn download_plan(selector: &str) -> Result<DownloadPlan, String> {
         .ok_or("Manifest API did not supply a SHA-1 hash")?.to_ascii_lowercase();
     let manifests=element.get("manifests").and_then(Value::as_array)
         .ok_or("Epic manifest URLs missing")?;
+    let mut secrets=crate::manifest::Secrets::new();
+    if let Some(values)=element.get("secrets").and_then(Value::as_object) {
+        for (guid,key) in values {
+            if let Some(key)=key.as_str() {
+                secrets.insert(guid.to_ascii_uppercase(),key.to_string());
+            }
+        }
+    }
     let mut bases=Vec::new();
     let mut errors=Vec::new();
     for entry in manifests {
@@ -297,12 +306,12 @@ pub fn download_plan(selector: &str) -> Result<DownloadPlan, String> {
         }
         let actual=hex::encode(Sha1::digest(&bytes));
         if actual!=expected_hash {errors.push("CDN manifest SHA-1 mismatch".into());continue;}
-        let manifest=crate::manifest::parse(&bytes)?;
+        let manifest=crate::manifest::parse_with_secrets(&bytes,&secrets)?;
         if !manifest.app_name.is_empty() && !manifest.app_name.eq_ignore_ascii_case(&app_name) {
             return Err("Epic manifest AppName differs from authenticated asset".into());
         }
         if bases.is_empty() {return Err("No chunk CDN base URL was returned".into());}
-        return Ok(DownloadPlan{manifest,bases,raw_manifest:bytes,app_name,namespace});
+        return Ok(DownloadPlan{manifest,bases,raw_manifest:bytes,secrets,app_name,namespace});
     }
     Err(format!("Could not retrieve a valid Epic game manifest: {}",errors.join("; ")))
 }

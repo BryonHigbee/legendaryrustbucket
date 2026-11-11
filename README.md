@@ -2,7 +2,7 @@
 <h1 align="center">LRB — LegendaryRustBucket</h1>
 <p align="center">A native <strong>Rust</strong> Epic Games launcher project focused on Rocket League for Windows and Linux.</p>
 
-> **Development status — not a production-ready Rocket League replacement.** All active launcher source code is Rust. There is **no Python code, Python interpreter, or Legendary executable dependency**. Epic sign-in and native HTTP requests are implemented, but native BuildPatch install/update/repair are implemented but **not yet validated with authenticated live Epic downloads**; encrypted manifests/chunks and full Rocket League online-launch compatibility are not yet supported or proven. No claims of increased FPS, reduced ping, or improved launch time have been measured.
+> **Development status — not a production-ready Rocket League replacement.** All active launcher source code is Rust. There is **no Python code, Python interpreter, or Legendary executable dependency**. Epic sign-in and native HTTP requests are implemented, but native BuildPatch install/update/repair are implemented but **not yet validated with authenticated live Epic downloads**; newer encrypted BuildPatch manifests/chunks are implemented but unverified live, and full Rocket League online-launch compatibility is not proven. No claims of increased FPS, reduced ping, or improved launch time have been measured.
 
 ## Rust-only architecture
 
@@ -23,10 +23,10 @@ cargo run -- doctor
 
 The resulting binary is `target/release/lrb` (Linux) or `target/release/lrb.exe` (Windows). Dependencies are Rust crates from crates.io, not the Python Legendary launcher.
 
-## Native Rocket League install, update, verify, repair (v0.5.0, experimental)
+## Native Rocket League install, update, verify, repair (v0.6.0, experimental)
 
 With an authenticated Epic account, LRB now requests the Windows Rocket League assets
-and a signed BuildPatch manifest, validates its SHA-1, parses supported JSON/binary
+and a signed BuildPatch manifest, validates its SHA-1, parses supported JSON/binary and AES-256-GCM encrypted
 manifests, retrieves chunk files in Rust, checks integrity, assembles game files, and
 registers them only after completion. **No Python or Legendary executable is used.**
 
@@ -47,7 +47,7 @@ reuses unchanged files based on their SHA-1 hashes. New/updated files are assemb
 to temporary files, verified, and then installed. It does not delete files that
 are absent from a new manifest. The chunk cache is removed after success.
 
-**Known limitations:** Encrypted BuildPatch manifests/chunks are rejected (rather than
+**Known limitations:** AES-256-GCM encrypted BuildPatch manifests and chunks are supported using Epic-provided keys in memory; unknown or unauthenticated formats are rejected (rather than
 silently corrupted); installation API responses and Rocket League gameplay still
 require real-account end-to-end testing. Selective install tags, prerequisite installers,
 file-deletion patch optimizations, anti-cheat initialization and Epic ownership-token

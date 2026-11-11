@@ -25,6 +25,7 @@ struct EpicInstallManifest {
     needs_validation: bool,
 }
 
+#[cfg(not(windows))]
 fn wine_prefix() -> Result<PathBuf, String> {
     env::var_os("WINEPREFIX")
         .map(PathBuf::from)

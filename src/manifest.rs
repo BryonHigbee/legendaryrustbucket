@@ -1,7 +1,9 @@
-//! Epic BuildPatch manifests and chunk decoding (JSON and unencrypted binary).
+//! Epic BuildPatch manifests and chunks: JSON, binary, zlib and AES-GCM.
 //! Strict bounds, SHA-1 and path validation prevent installing untrusted files.
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use flate2::read::ZlibDecoder;
+use aes_gcm::{Aes256Gcm, Nonce, Tag, aead::{AeadInPlace, KeyInit}};
+use serde::{Serialize, Deserialize};
 use serde_json::Value;
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
@@ -15,22 +17,24 @@ const MANIFEST_MAGIC: u32 = 0x44BEC00C;
 const CHUNK_MAGIC: u32 = 0xB1FE3AA2;
 
 type Guid = [u8; 16];
+pub type Secrets = HashMap<String, String>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChunkInfo {
     pub guid: Guid,
+    pub secret_guid: Guid,
     pub hash: u64,
     pub sha: [u8; 20],
     pub size: u32,
     pub url_path: String,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Part {
     pub guid: Guid,
     pub offset: usize,
     pub size: usize,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileInfo {
     pub name: String,
     pub sha: [u8; 20],
@@ -38,7 +42,7 @@ pub struct FileInfo {
     pub executable: bool,
     pub size: u64,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
     pub app_name: String,
     pub version: String,
@@ -75,9 +79,30 @@ fn limit_decompress(data: &[u8], limit: usize) -> Result<Vec<u8>, String> {
     if out.len() > limit { return Err("Decompressed payload exceeds safety limit".into()); }
     Ok(out)
 }
+
+fn decrypt_gcm(data:&[u8],nonce:&[u8],tag:&[u8],secret_guid:Guid,secrets:&Secrets)->Result<Vec<u8>,String>{
+    if nonce.len()!=12 || tag.len()!=16{return Err("Invalid Epic AES-GCM IV or authentication tag length".into());}
+    let name=guid_hex(secret_guid);
+    let secret=secrets.get(&name).ok_or_else(||format!("Encrypted Epic content requires missing key {name}"))?;
+    let key=hex::decode(secret).map_err(|_|"Invalid Epic manifest AES key encoding")?;
+    if key.len()!=32{return Err("Unsupported Epic AES-GCM key length (expected AES-256)".into());}
+    let cipher=Aes256Gcm::new_from_slice(&key).map_err(|_|"Invalid Epic AES-GCM key")?;
+    let mut plaintext=data.to_vec();
+    cipher.decrypt_in_place_detached(Nonce::from_slice(nonce),b"",&mut plaintext,Tag::from_slice(tag))
+        .map_err(|_|"Epic AES-GCM authentication failed")?;
+    Ok(plaintext)
+}
 fn guid_hex(guid: Guid) -> String {
     let n = (0..4).map(|i| u32::from_le_bytes(guid[4*i..4*i+4].try_into().unwrap()));
     n.map(|x| format!("{x:08X}")).collect()
+}
+fn json_guid(hex_str: &str) -> Result<Guid, String> {
+    let raw=hex::decode(hex_str).map_err(|e|e.to_string())?;
+    let mut guid: Guid=raw.try_into().map_err(|_| "Invalid JSON chunk GUID length")?;
+    // JSON GUIDs are big-endian 32-bit groups; binary chunks store little-endian
+    // groups. Normalize so the two manifest formats reference the same identity.
+    for group in guid.chunks_exact_mut(4) {group.reverse();}
+    Ok(guid)
 }
 fn chunk_path(version: u32, group: u8, hash: u64, guid: Guid, secret: Guid) -> String {
     let folder = if version >= 22 {"ChunksV5"} else if version >= 15 {"ChunksV4"} else if version >= 6 {"ChunksV3"} else if version >= 3 {"ChunksV2"} else {"Chunks"};
@@ -113,15 +138,14 @@ fn parse_json(data: &[u8]) -> Result<Manifest, String> {
     if cfl.len() > MAX_ENTRIES { return Err("Too many chunks in manifest".into()); }
     let mut chunks = HashMap::new();
     for (key, size) in cfl {
-        let raw = hex::decode(key).map_err(|e| e.to_string())?;
-        let guid: Guid = raw.try_into().map_err(|_| "Invalid chunk GUID length")?;
+        let guid=json_guid(key)?;
         let hash = parse_blob_number(hashes.get(key).and_then(Value::as_str).ok_or("Chunk hash missing")?)?;
         let sha_raw = hex::decode(shas.get(key).and_then(Value::as_str).ok_or("Chunk SHA missing")?).map_err(|e| e.to_string())?;
         let sha: [u8;20] = sha_raw.try_into().map_err(|_| "Invalid chunk SHA length")?;
         let group = parse_blob_number(groups.get(key).and_then(Value::as_str).ok_or("Chunk group missing")?)?;
         let size = parse_blob_number(size.as_str().ok_or("Chunk size must be string")?)?;
         if group > 255 || size > u32::MAX as u64 { return Err("Invalid chunk size/group".into()); }
-        let info = ChunkInfo { guid, hash, sha, size: 1024*1024, url_path: chunk_path(version, group as u8, hash, guid, [0;16]) };
+        let info = ChunkInfo { guid, secret_guid: [0;16], hash, sha, size: 1024*1024, url_path: chunk_path(version, group as u8, hash, guid, [0;16]) };
         if chunks.insert(guid,info).is_some() { return Err("Duplicate chunk GUID".into()); }
     }
     let list = value.get("FileManifestList").and_then(Value::as_array).ok_or("JSON manifest missing FileManifestList")?;
@@ -144,8 +168,7 @@ fn parse_json(data: &[u8]) -> Result<Manifest, String> {
         let mut parts = Vec::with_capacity(parts_json.len());
         let mut file_size = 0u64;
         for p in parts_json {
-            let raw=hex::decode(json_str(p,"Guid")?).map_err(|e|e.to_string())?;
-            let guid: Guid=raw.try_into().map_err(|_|"Invalid part GUID length")?;
+            let guid=json_guid(json_str(p,"Guid")?)?;
             let offset=parse_blob_number(json_str(p,"Offset")?)? as usize;
             let size=parse_blob_number(json_str(p,"Size")?)? as usize;
             let chunk=chunks.get(&guid).ok_or("File refers to an unknown chunk")?;
@@ -203,7 +226,7 @@ impl<'a> Cursor<'a> {
         Ok(count)
     }
 }
-fn parse_binary(data:&[u8])->Result<Manifest,String>{
+fn parse_binary(data:&[u8], secrets:&Secrets)->Result<Manifest,String>{
     let mut outer=Cursor::new(data);
     if outer.u32()?!=MANIFEST_MAGIC{return Err("Invalid Epic manifest magic".into());}
     let head_size=outer.u32()? as usize;
@@ -215,8 +238,9 @@ fn parse_binary(data:&[u8])->Result<Manifest,String>{
     if !(41..=128).contains(&head_size) || uncompressed>MAX_MANIFEST || compressed>MAX_MANIFEST {
         return Err("Epic manifest header size out of bounds".into());
     }
-    if version>=22 {outer.take(32)?;}
-    if stored_as&2 !=0 {return Err("Encrypted Epic manifests are not yet supported".into());}
+    let mut outer_secret=[0;16];
+    let mut outer_tag=[0;16];
+    if version>=22 {outer_secret=outer.guid()?;outer_tag=outer.take(16)?.try_into().unwrap();}
     if head_size<outer.pos || head_size>data.len(){return Err("Invalid Epic header length".into());}
     outer.pos=head_size;
     let raw=outer.take(data.len()-head_size)?;
@@ -233,7 +257,7 @@ fn parse_binary(data:&[u8])->Result<Manifest,String>{
     let _app_id=r.u32()?;
     let app_name=r.fstr()?;
     let build_version=r.fstr()?;
-    let launch_exe=r.fstr()?;
+    let mut launch_exe=r.fstr()?;
     let _launch_cmd=r.fstr()?;
     let pre_count=r.bounded_count()?;
     for _ in 0..pre_count {r.fstr()?;}
@@ -257,9 +281,9 @@ fn parse_binary(data:&[u8])->Result<Manifest,String>{
     let mut sizes=Vec::with_capacity(count);
     for _ in 0..count {sizes.push(r.u32()?);}
     for _ in 0..count {r.u64()?;} // downloaded compressed byte sizes
-    let mut secrets=vec![[0;16];count];
+    let mut chunk_secret_guids=vec![[0;16];count];
     if feature>=22 {
-        for secret in secrets.iter_mut() {*secret=r.guid()?;}
+        for secret in chunk_secret_guids.iter_mut() {*secret=r.guid()?;}
         for _ in 0..count {r.u32()?;} // compressed window size
         for _ in 0..count {r.take(16)?;} // GCM tags
     }
@@ -267,7 +291,7 @@ fn parse_binary(data:&[u8])->Result<Manifest,String>{
     let mut chunks=HashMap::with_capacity(count);
     for i in 0..count {
         if sizes[i]==0 || sizes[i] as usize>MAX_CHUNK{return Err("Unsupported chunk window size".into());}
-        let item=ChunkInfo{guid:guid[i],hash:hash[i],sha:sha[i],size:sizes[i],
+        let item=ChunkInfo{guid:guid[i],secret_guid:chunk_secret_guids[i],hash:hash[i],sha:sha[i],size:sizes[i],
             url_path:chunk_path(feature,groups[i],hash[i],guid[i],secrets[i])};
         if chunks.insert(guid[i],item).is_some(){return Err("Duplicate Epic chunk GUID".into());}
     }
@@ -302,7 +326,6 @@ fn parse_binary(data:&[u8])->Result<Manifest,String>{
             r.section_end(begin,part_size)?;
             parts.push(Part{guid,offset,size});
         }
-        path_in_install(&names[idx])?;
         files.push(FileInfo{name:names[idx].clone(),sha:shas[idx],parts,size:file_size,executable:flags[idx]&4!=0});
     }
     if file_list_version>=1 {
@@ -311,6 +334,62 @@ fn parse_binary(data:&[u8])->Result<Manifest,String>{
     }
     if file_list_version>=2 {for _ in 0..count {r.take(32)?;}}
     r.section_end(start,section_size)?;
+
+    // Custom fields always follow the file manifest list.
+    let cf_start=r.pos;
+    let cf_size=r.u32()? as usize;
+    let _cf_version=r.u8()?;
+    let cf_count=r.bounded_count()?;
+    for _ in 0..cf_count {r.fstr()?;}
+    for _ in 0..cf_count {r.fstr()?;}
+    r.section_end(cf_start,cf_size)?;
+
+    if stored_as&2!=0 {
+        if version<24 || feature<24 {
+            return Err("Unsupported encrypted Epic manifest version".into());
+        }
+        let ed_start=r.pos;
+        let ed_size=r.u32()? as usize;
+        let _ed_version=r.u8()?;
+        let cipher_section_size=r.u32()? as usize;
+        let cipher_start=r.pos-4;
+        let encrypted_header_start=r.pos;
+        let header_size=r.u32()? as usize;
+        let _header_version=r.u32()?;
+        let encrypted_flags=r.u8()?;
+        let uncompressed_size=r.u32()? as usize;
+        let _compressed_size=r.u32()?;
+        let iv_len=r.u32()? as usize;
+        if iv_len>64 {return Err("Invalid Epic encrypted metadata nonce length".into());}
+        let iv=r.take(iv_len)?.to_vec();
+        r.section_end(encrypted_header_start,header_size)?;
+        let ciphertext_size=r.u32()? as usize;
+        if ciphertext_size>MAX_MANIFEST{return Err("Epic encrypted metadata exceeds size limit".into());}
+        let ciphertext=r.take(ciphertext_size)?;
+        let plaintext=decrypt_gcm(ciphertext,&iv,&outer_tag,outer_secret,secrets)?;
+        r.section_end(cipher_start,cipher_section_size)?;
+        r.section_end(ed_start,ed_size)?;
+        let plaintext=if encrypted_flags&1!=0 {
+            let expanded=limit_decompress(&plaintext,MAX_MANIFEST)?;
+            if expanded.len()!=uncompressed_size {return Err("Epic decrypted metadata size mismatch".into());}
+            expanded
+        } else {
+            if plaintext.len()!=uncompressed_size {return Err("Epic decrypted metadata size mismatch".into());}
+            plaintext
+        };
+        let mut private=Cursor::new(&plaintext);
+        launch_exe=private.fstr()?;
+        let _launch_command=private.fstr()?;
+        let count=private.bounded_count()?;
+        for _ in 0..count {private.fstr()?;}
+        for _ in 0..5 {private.fstr()?;}
+        for file in &mut files {
+            file.name=private.fstr()?;
+            let symlink=private.fstr()?;
+            if !symlink.is_empty(){return Err("Epic symlink targets are unsupported".into());}
+        }
+        // Future Epic versions may add optional trailing encrypted metadata.
+    }
     let mut result=Manifest{app_name,version:build_version,launch_exe,files,chunks};
     if !result.launch_exe.is_empty(){path_in_install(&result.launch_exe)?;}
     validate(&mut result)?;
@@ -329,13 +408,14 @@ fn validate(manifest:&mut Manifest)->Result<(),String>{
     if manifest.files.is_empty(){return Err("Manifest contains no installable files".into());}
     Ok(())
 }
-pub fn parse(data:&[u8])->Result<Manifest,String>{
+pub fn parse_with_secrets(data:&[u8],secrets:&Secrets)->Result<Manifest,String>{
     if data.len()>MAX_MANIFEST {return Err("Manifest larger than safety limit".into());}
-    if data.first()==Some(&b'{'){parse_json(data)} else {parse_binary(data)}
+    if data.first()==Some(&b'{'){parse_json(data)} else {parse_binary(data,secrets)}
 }
+pub fn parse(data:&[u8])->Result<Manifest,String>{parse_with_secrets(data,&Secrets::new())}
 
 /// Decode a BuildPatch chunk and check its GUID, SHA-1 and size.
-pub fn decode_chunk(data:&[u8], expected:&ChunkInfo)->Result<Vec<u8>,String>{
+pub fn decode_chunk_with_secrets(data:&[u8], expected:&ChunkInfo,secrets:&Secrets)->Result<Vec<u8>,String>{
     if data.len()>MAX_CHUNK+512{return Err("Chunk exceeds size limit".into());}
     let mut r=Cursor::new(data);
     if r.u32()?!=CHUNK_MAGIC{return Err("Invalid Epic chunk magic".into());}
@@ -349,8 +429,8 @@ pub fn decode_chunk(data:&[u8], expected:&ChunkInfo)->Result<Vec<u8>,String>{
     let mut hash_type=0;
     if version>=2 {sha=Some(r.hash()?);hash_type=r.u8()?;}
     let uncompressed_len=if version>=3 {r.u32()? as usize}else{expected.size as usize};
-    if version>=4 {r.take(32)?;} // Secret GUID / GCM tag, if present.
-    if stored&2!=0 {return Err("Encrypted Epic chunks are not yet supported".into());}
+    let (chunk_secret,tag)=if version>=4 {(r.guid()?,r.take(16)?.to_vec())} else {([0;16],Vec::new())};
+    if version>=4 && chunk_secret!=expected.secret_guid{return Err("Chunk encryption GUID differs from Epic manifest".into());}
     if guid!=expected.guid || header!=r.pos || compressed_len!=data.len().saturating_sub(header){
         return Err("Chunk GUID/header/payload size mismatch".into());
     }
@@ -358,7 +438,11 @@ pub fn decode_chunk(data:&[u8], expected:&ChunkInfo)->Result<Vec<u8>,String>{
         return Err("Chunk uncompressed size mismatch".into());
     }
     let raw=&data[header..];
-    let decoded=if stored&1!=0 {limit_decompress(raw,MAX_CHUNK)?} else {raw.to_vec()};
+    let raw=if stored&2!=0 {
+        let sha=sha.ok_or("Encrypted chunk header missing nonce SHA")?;
+        decrypt_gcm(raw,&sha[..12],&tag,chunk_secret,secrets)?
+    }else{raw.to_vec()};
+    let decoded=if stored&1!=0 {limit_decompress(&raw,MAX_CHUNK)?} else {raw};
     if decoded.len()!=uncompressed_len{return Err("Chunk decoded size mismatch".into());}
     let digest=sha1_bytes(&decoded);
     if hash_type&2 !=0 && sha.is_some_and(|h|h!=digest) {
@@ -366,6 +450,10 @@ pub fn decode_chunk(data:&[u8], expected:&ChunkInfo)->Result<Vec<u8>,String>{
     }
     if expected.sha!=[0;20] && expected.sha!=digest{return Err("Chunk SHA-1 mismatch against manifest".into());}
     Ok(decoded)
+}
+
+pub fn decode_chunk(data:&[u8],expected:&ChunkInfo)->Result<Vec<u8>,String>{
+    decode_chunk_with_secrets(data,expected,&Secrets::new())
 }
 
 pub fn file_sha_matches(path:&Path,expected:&[u8;20])->Result<bool,String>{
@@ -397,8 +485,102 @@ mod tests{
         let path=chunk_path(18,1,0x1234,[1;16],[0;16]);
         assert!(path.starts_with("ChunksV4/01/0000000000001234_"));
     }
+
+    #[test]
+    fn json_guids_are_normalized_to_binary_chunk_order() {
+        let guid=json_guid("00000001000000020000000300000004").unwrap();
+        assert_eq!(guid,[1,0,0,0,2,0,0,0,3,0,0,0,4,0,0,0]);
+        assert!(guid_hex(guid).ends_with("00000001000000020000000300000004"));
+    }
+
+    #[test]
+    fn synthetic_chunk_is_reconstructed_and_authenticated() {
+        let bytes=b"GAME";
+        let guid=[7u8;16];
+        let digest=sha1_bytes(bytes);
+        let mut raw=Vec::new();
+        raw.extend_from_slice(&CHUNK_MAGIC.to_le_bytes());
+        raw.extend_from_slice(&3u32.to_le_bytes());
+        raw.extend_from_slice(&66u32.to_le_bytes());
+        raw.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        raw.extend_from_slice(&guid);
+        raw.extend_from_slice(&0u64.to_le_bytes());
+        raw.push(0);
+        raw.extend_from_slice(&digest);
+        raw.push(2);
+        raw.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        raw.extend_from_slice(bytes);
+        let chunk=ChunkInfo{guid,secret_guid:[0;16],hash:0,sha:digest,size:4,url_path:"test.chunk".into()};
+        assert_eq!(decode_chunk(&raw,&chunk).unwrap(),bytes);
+        *raw.last_mut().unwrap()=b'X';
+        assert!(decode_chunk(&raw,&chunk).is_err());
+    }
+
+    #[test]
+    fn synthetic_json_manifest_maps_parts_to_chunks() {
+        let key="00000001000000020000000300000004";
+        let content=b"GAME";
+        let sha_bytes=sha1_bytes(content);
+        let sha_encoded=sha_bytes.iter().map(|byte|format!("{byte:03}")).collect::<String>();
+        let mut a=serde_json::Map::new();
+        let mut b=serde_json::Map::new();
+        let mut c=serde_json::Map::new();
+        let mut d=serde_json::Map::new();
+        a.insert(key.into(),serde_json::json!("004000000000"));
+        b.insert(key.into(),serde_json::json!("001000000000000000000000"));
+        c.insert(key.into(),serde_json::json!(hex::encode(sha_bytes)));
+        d.insert(key.into(),serde_json::json!("001"));
+        let manifest=serde_json::json!({
+            "ManifestFileVersion":"018000000000",
+            "AppNameString":"Sugar","BuildVersionString":"unit-test",
+            "LaunchExeString":"Binaries/Win64/RocketLeague.exe",
+            "ChunkFilesizeList":a,"ChunkHashList":b,
+            "ChunkShaList":c,"DataGroupList":d,
+            "FileManifestList":[{
+                "Filename":"Game.bin","FileHash":sha_encoded,
+                "FileChunkParts":[{"Guid":key,"Offset":"000","Size":"004"}]
+            }]
+        }).to_string();
+        let parsed=parse(manifest.as_bytes()).unwrap();
+        assert_eq!(parsed.files.len(),1);
+        assert_eq!(parsed.files[0].size,4);
+        assert_eq!(parsed.files[0].parts[0].guid,json_guid(key).unwrap());
+        assert!(parsed.chunks.contains_key(&json_guid(key).unwrap()));
+    }
+
+    #[test]
+    fn decrypts_authenticated_aes_256_gcm_epic_chunk() {
+        let payload=b"GAME";
+        let digest=sha1_bytes(payload);
+        let guid=[7u8;16];
+        let secret_guid=[9u8;16];
+        let key=[8u8;32];
+        let mut ciphertext=payload.to_vec();
+        let cipher=Aes256Gcm::new_from_slice(&key).unwrap();
+        let tag=cipher.encrypt_in_place_detached(Nonce::from_slice(&digest[..12]),b"",&mut ciphertext).unwrap();
+        let mut chunk=Vec::new();
+        chunk.extend_from_slice(&CHUNK_MAGIC.to_le_bytes());
+        chunk.extend_from_slice(&4u32.to_le_bytes());
+        chunk.extend_from_slice(&98u32.to_le_bytes());
+        chunk.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        chunk.extend_from_slice(&guid);
+        chunk.extend_from_slice(&0u64.to_le_bytes());
+        chunk.push(2);
+        chunk.extend_from_slice(&digest);
+        chunk.push(2);
+        chunk.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        chunk.extend_from_slice(&secret_guid);
+        chunk.extend_from_slice(&tag);
+        chunk.extend_from_slice(&ciphertext);
+        let expected=ChunkInfo{guid,secret_guid,hash:0,sha:digest,size:4,url_path:"test.chunk".into()};
+        let mut secrets=Secrets::new();
+        secrets.insert(guid_hex(secret_guid),hex::encode(key));
+        assert_eq!(decode_chunk_with_secrets(&chunk,&expected,&secrets).unwrap(),payload);
+        *chunk.last_mut().unwrap()^=1;
+        assert!(decode_chunk_with_secrets(&chunk,&expected,&secrets).is_err());
+    }
     #[test] fn invalid_chunk_rejected(){
-        let info=ChunkInfo{guid:[0;16],hash:0,sha:[0;20],size:1024,url_path:"x".into()};
+        let info=ChunkInfo{guid:[0;16],secret_guid:[0;16],hash:0,sha:[0;20],size:1024,url_path:"x".into()};
         assert!(decode_chunk(b"random",&info).is_err());
     }
 }

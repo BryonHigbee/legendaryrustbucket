@@ -23,6 +23,8 @@ jobs:
         run: cargo build --release
       - name: Test Rust launcher
         run: cargo test --all-targets
+      - name: Production binary version smoke test
+        run: cargo run --release -- doctor
       - name: CLI smoke test
         run: cargo run -- help
       - name: Importer help smoke test

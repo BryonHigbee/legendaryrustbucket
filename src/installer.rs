@@ -46,10 +46,10 @@ fn cache_path(cache_dir: &Path, info: &ChunkInfo) -> PathBuf {
     cache_dir.join(format!("{}.chunk", hex::encode(info.guid)))
 }
 
-fn download_chunk(client:&Client, bases:&[String], cache_dir:&Path, info:&ChunkInfo)->Result<(),String>{
+fn download_chunk(client:&Client, bases:&[String], cache_dir:&Path, info:&ChunkInfo,secrets:&manifest::Secrets)->Result<(),String>{
     let path=cache_path(cache_dir,info);
     if let Ok(data)=fs::read(&path) {
-        if manifest::decode_chunk(&data,info).is_ok() {return Ok(());}
+        if manifest::decode_chunk_with_secrets(&data,info,secrets).is_ok() {return Ok(());}
         // Corrupted cached chunks must not silently poison an installation.
         fs::remove_file(&path).map_err(|e| format!("Cannot remove corrupt cache chunk: {e}"))?;
     }
@@ -78,7 +78,7 @@ fn download_chunk(client:&Client, bases:&[String], cache_dir:&Path, info:&ChunkI
             if response.take(33*1024*1024).read_to_end(&mut data).is_err() || data.len()>=33*1024*1024 {
                 errors.push("Chunk download exceeds safety limit".into());continue;
             }
-            if let Err(e)=manifest::decode_chunk(&data,info) {
+            if let Err(e)=manifest::decode_chunk_with_secrets(&data,info,secrets) {
                 errors.push(format!("Chunk integrity error: {e}"));continue;
             }
             let temp=path.with_extension("chunk.part");
@@ -89,7 +89,7 @@ fn download_chunk(client:&Client, bases:&[String], cache_dir:&Path, info:&ChunkI
                     let _=fs::remove_file(&temp);
                     // Another process may have created cache file. Verify it.
                     if let Ok(other)=fs::read(&path) {
-                        if manifest::decode_chunk(&other,info).is_ok(){return Ok(());}
+                        if manifest::decode_chunk_with_secrets(&other,info,secrets).is_ok(){return Ok(());}
                     }
                     return Err(format!("Cannot publish cached chunk: {e}"));
                 }
@@ -120,7 +120,7 @@ fn publish_file(staged:&Path,target:&Path)->Result<(),String>{
     }
     Ok(())
 }
-fn assemble_file(root:&Path,cache:&Path,game_file:&FileInfo,chunks:&HashMap<[u8;16],ChunkInfo>)->Result<(),String>{
+fn assemble_file(root:&Path,cache:&Path,game_file:&FileInfo,chunks:&HashMap<[u8;16],ChunkInfo>,secrets:&manifest::Secrets)->Result<(),String>{
     let path=safe_join(root,&game_file.name)?;
     if let Some(parent)=path.parent(){fs::create_dir_all(parent).map_err(|e|format!("Cannot create install folder: {e}"))?;}
     let temp=temp_path(&path)?;
@@ -134,7 +134,7 @@ fn assemble_file(root:&Path,cache:&Path,game_file:&FileInfo,chunks:&HashMap<[u8;
         for part in &game_file.parts {
             let chunk=chunks.get(&part.guid).ok_or("Manifest references unavailable chunk")?;
             let bytes=fs::read(cache_path(cache,chunk)).map_err(|e|format!("Cached chunk missing: {e}"))?;
-            let decoded=manifest::decode_chunk(&bytes,chunk)?;
+            let decoded=manifest::decode_chunk_with_secrets(&bytes,chunk,secrets)?;
             let end=part.offset.checked_add(part.size).ok_or("Chunk offset overflow")?;
             let slice=decoded.get(part.offset..end).ok_or("Chunk part out of bounds")?;
             output.write_all(slice).map_err(|e|format!("Cannot write game file: {e}"))?;
@@ -163,6 +163,14 @@ fn assemble_file(root:&Path,cache:&Path,game_file:&FileInfo,chunks:&HashMap<[u8;
 }
 
 fn read_manifest_for_game(game:&store::InstalledGame)->Result<Manifest,String>{
+    let index=game.install_path.join(".lrb/index.bin");
+    if index.is_file() {
+        let data=fs::read(&index).map_err(|e|format!("Cannot read LRB install index: {e}"))?;
+        if data.len()>128*1024*1024{return Err("LRB install index exceeds safety limit".into());}
+        use bincode::Options;
+        return bincode::DefaultOptions::new().with_fixint_encoding().with_limit(128*1024*1024)
+            .deserialize(&data).map_err(|e|format!("Invalid LRB install index: {e}"));
+    }
     let data=fs::read(game.install_path.join(".lrb/manifest.bin"))
         .map_err(|e|format!("No saved LRB install manifest for this game: {e}. Run lrb update to fetch it."))?;
     manifest::parse(&data)
@@ -228,10 +236,10 @@ pub fn install(options:InstallOptions)->Result<(),String>{
         .build().map_err(|e|e.to_string())?;
     let pool=rayon::ThreadPoolBuilder::new().num_threads(options.workers).build()
         .map_err(|e|e.to_string())?;
-    pool.install(||chunks.par_iter().try_for_each(|chunk|download_chunk(&client,&plan.bases,&cache,chunk)))?;
+    pool.install(||chunks.par_iter().try_for_each(|chunk|download_chunk(&client,&plan.bases,&cache,chunk,&plan.secrets)))?;
     println!("Chunks downloaded and verified. Assembling game files...");
     for (i,file) in changed.iter().enumerate() {
-        assemble_file(&root,&cache,file,&plan.manifest.chunks)?;
+        assemble_file(&root,&cache,file,&plan.manifest.chunks,&plan.secrets)?;
         if i%100==0 || i+1==changed.len(){println!("Completed {}/{} files",i+1,changed.len());}
     }
     // Required launch executable must exist before claiming successful installation.
@@ -244,6 +252,16 @@ pub fn install(options:InstallOptions)->Result<(),String>{
     let manifest_path=state_dir.join("manifest.bin");
     if manifest_path.exists() { fs::remove_file(&manifest_path).map_err(|e|e.to_string())?; }
     fs::rename(&manifest_tmp,&manifest_path).map_err(|e|e.to_string())?;
+    // Store the parsed manifest without encryption keys so offline full
+    // verification still works when Epic encrypts manifest filenames.
+    use bincode::Options;
+    let index=bincode::DefaultOptions::new().with_fixint_encoding()
+        .serialize(&plan.manifest).map_err(|e|format!("Cannot serialize install index: {e}"))?;
+    let index_tmp=state_dir.join("index.bin.tmp");
+    fs::write(&index_tmp,&index).map_err(|e|format!("Cannot save install index: {e}"))?;
+    let index_path=state_dir.join("index.bin");
+    if index_path.exists() {fs::remove_file(&index_path).map_err(|e|e.to_string())?;}
+    fs::rename(&index_tmp,&index_path).map_err(|e|e.to_string())?;
     let registered=store::InstalledGame{
         app_name:plan.app_name.clone(),title:"Rocket League".into(),install_path:root.clone(),
         executable:game_exe,namespace:plan.namespace,platform:"Windows".into()
@@ -269,7 +287,7 @@ mod tests{
         assert!(install(options).is_err()); // Before any network call.
     }
     #[test] fn download_cache_names_are_deterministic(){
-        let chunk=ChunkInfo{guid:[0x12;16],hash:0,sha:[0;20],size:4,url_path:"ChunksV4/test.chunk".into()};
+        let chunk=ChunkInfo{guid:[0x12;16],secret_guid:[0;16],hash:0,sha:[0;20],size:4,url_path:"ChunksV4/test.chunk".into()};
         let path=cache_path(Path::new("cache"),&chunk);
         assert!(path.to_string_lossy().contains("12121212"));
     }
