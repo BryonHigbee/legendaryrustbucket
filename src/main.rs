@@ -1,6 +1,7 @@
 //! LRB: Rust-native launcher foundation. Never starts Python or Legendary.
 mod epic;
 mod egl;
+mod network;
 mod store;
 
 use std::env;
@@ -9,7 +10,7 @@ use std::process::{Command, ExitCode};
 use store::InstalledGame;
 
 const HELP: &str = "\
-LRB — LegendaryRustBucket v0.3.0 (100% Rust launcher foundation)
+LRB — LegendaryRustBucket v0.4.0 (100% Rust launcher foundation)
 
 Usage:
   lrb help
@@ -26,6 +27,9 @@ Usage:
   lrb register --app ID --title NAME --path DIR --exe RELATIVE_EXE --namespace ID [--platform Windows|Linux]
   lrb launch [--app ID_OR_TITLE] [--wine WINE_PATH] [--dry-run]
   lrb verify [--app ID_OR_TITLE]   Check registered executable (not full file verification)
+  lrb online-check [--app ID_OR_TITLE]  Validate local install, Epic OAuth and launch-token issuance
+  lrb net-probe --host HOST [--port 443] [--samples 8] [--timeout-ms 1250] [--json]
+                                   Probe TCP connect RTT; NOT in-game ping
   lrb install                      Not implemented; does NOT invoke Python
 
 Environment:
@@ -119,6 +123,45 @@ fn import_egl(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn online_check(args: &[String]) -> Result<(), String> {
+    if args.iter().any(|arg| arg == "--help") {
+        println!("Use: lrb online-check [--app ID_OR_TITLE]");
+        println!("Checks the local game executable, Epic OAuth session and exchange-code endpoint.");
+        println!("Does not prove matchmaking, EAC runtime status or network latency.");
+        return Ok(());
+    }
+    allowed_flags(args, &["--app"], &[])?;
+    let game = select_game(args)?;
+    let exe = store::executable_path(&game)?;
+    println!("Local game executable: {}", exe.display());
+    println!("Epic app: {} | namespace: {}", game.app_name, game.namespace);
+    epic::online_preflight()?;
+    println!("LRB preflight passed. NOT YET TESTED: Rocket League EAC startup, online matchmaking or gameplay.");
+    Ok(())
+}
+
+fn net_probe(args: &[String]) -> Result<(), String> {
+    if args.iter().any(|arg| arg == "--help") {
+        println!("Use: lrb net-probe --host HOST [--port 443] [--samples 8] [--timeout-ms 1250] [--json]");
+        println!("TCP connect timing to a host of your choice. Not Rocket League match ping.");
+        return Ok(());
+    }
+    allowed_flags(args, &["--host", "--port", "--samples", "--timeout-ms"], &["--json"])?;
+    let host = required(args, "--host")?;
+    let parse_number = |flag: &str, default: &str| -> Result<u64, String> {
+        get_flag(args, flag)?
+            .unwrap_or_else(|| default.into())
+            .parse::<u64>()
+            .map_err(|_| format!("{flag} must be an unsigned integer"))
+    };
+    let port = u16::try_from(parse_number("--port", "443")?)
+        .map_err(|_| "--port is outside 1..65535".to_string())?;
+    let samples = u8::try_from(parse_number("--samples", "8")?)
+        .map_err(|_| "--samples is outside 1..30".to_string())?;
+    let timeout_ms = parse_number("--timeout-ms", "1250")?;
+    network::probe(&host, port, samples, timeout_ms, args.iter().any(|s| s == "--json"))
+}
+
 fn launch(args: &[String]) -> Result<(), String> {
     allowed_flags(args, &["--app", "--wine"], &["--dry-run"])?;
     let game = select_game(args)?;
@@ -171,7 +214,7 @@ fn run() -> Result<(), String> {
         "help" | "--help" | "-h" => { println!("{HELP}"); Ok(()) }
         "doctor" => {
             allowed_flags(rest, &[], &[])?;
-            println!("LRB v0.3.0 / OS {} / Rust-native: yes", std::env::consts::OS);
+            println!("LRB v0.4.0 / OS {} / Rust-native: yes", std::env::consts::OS);
             println!("Data: {}", store::data_dir()?.display());
             println!("Registered games: {}", store::load_installed()?.len());
             println!("Epic online login present: {}", epic::load_session().is_ok());
@@ -196,6 +239,8 @@ fn run() -> Result<(), String> {
         }
         "register" => register(rest),
         "import-egl" => import_egl(rest),
+        "online-check" => online_check(rest),
+        "net-probe" => net_probe(rest),
         "launch" => launch(rest),
         "verify" => {
             allowed_flags(rest, &["--app"], &[])?;

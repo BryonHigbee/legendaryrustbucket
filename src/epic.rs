@@ -119,6 +119,36 @@ pub fn game_exchange_token(session: &Session) -> Result<String, String> {
         .ok_or_else(|| "Epic did not return a game exchange code".into())
 }
 
+/// Validate the live OAuth session and native game exchange-code endpoint.
+/// This cannot establish EAC or matchmaking compatibility without launching a game.
+pub fn online_preflight() -> Result<(), String> {
+    let session = refreshed_session()?;
+    let client = http_client()?;
+    let response = client
+        .get(format!("{OAUTH_BASE}/verify"))
+        .bearer_auth(&session.access_token)
+        .send()
+        .map_err(|err| format!("Epic OAuth verification failed: {err}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Epic OAuth verification returned HTTP {}", response.status()));
+    }
+    let verification: Value = response.json()
+        .map_err(|err| format!("Invalid Epic OAuth verification data: {err}"))?;
+    let verified_id = verification.get("account_id").and_then(Value::as_str)
+        .ok_or_else(|| "Epic OAuth verify response has no account_id".to_string())?;
+    if verified_id != session.account_id {
+        return Err("Epic OAuth account ID does not match saved session".into());
+    }
+    println!("Epic OAuth session: verified (account ID matches)");
+    let code = game_exchange_token(&session)?;
+    if code.is_empty() {
+        return Err("Epic issued an empty game exchange code".into());
+    }
+    println!("Epic game exchange-code endpoint: passed (token kept private)");
+    println!("EAC / multiplayer server access: requires real in-game validation");
+    Ok(())
+}
+
 pub fn auth_status() -> Result<(), String> {
     let session = load_session()?;
     println!("Local session found for {}. Use 'lrb library' to check the online session.", display_name(&session));

@@ -73,6 +73,48 @@ On Windows, use a Windows directory path for `--path`. On Linux, the native laun
 
 The launch command requests an Epic exchange code and supplies standard Epic launch parameters without touching the game or anti-cheat. **Whether Rocket League successfully connects online through this flow remains untested**, particularly in Wine/Proton environments.
 
+## Check Rocket League online-launch prerequisites (experimental)
+
+The native Rust `online-check` command validates the existing executable and game metadata,
+refreshes your Epic session, verifies the account with Epic's OAuth endpoint, and requests
+a short-lived game exchange code. It never prints your private token. **Passing this check
+does not establish that Rocket League starts, EAC initializes, or online matchmaking works.**
+
+```bash
+lrb import-egl
+lrb online-check --app "Rocket League"
+lrb launch --app "Rocket League"
+```
+
+To establish online gameplay compatibility, test a real account and properly installed
+Rocket League on Windows and Linux: confirm EAC stays enabled, the game starts, a private
+or casual online match joins, and input/network behavior is correct. Record OS, Wine/Proton
+version, game build, error messages and your own measured in-game ping. Never provide
+your access/refresh token or saved session file in an issue.
+
+Official support: [EAC required for online PC play](https://www.rocketleague.com/news/easy-anti-cheat-comes-to-rocket-league-on-pc-today);
+[Linux support](https://www.epicgames.com/help/c-37599050/c-42869540/steam-deck-linux-macos-a13980741).
+
+## Diagnose network latency without making false ping claims
+
+`net-probe` measures TCP connection setup to a host you choose, with median, p95,
+consecutive sample variation, and failure count. It runs directly in Rust without
+shelling out to system `ping` or modifying traffic. TCP latency to a web host is
+**not equivalent to Rocket League's UDP game-server ping**.
+
+```bash
+lrb net-probe --host example.com --port 443 --samples 10
+lrb net-probe --host example.com --samples 10 --json
+```
+
+To test a lower-ping hypothesis, record multiple actual in-game matches before and
+after changing one approved setting: the matchmaking server region, wired vs Wi-Fi,
+or background downloads. Compare medians, p95 and packet-loss indicators using the
+same region and comparable times of day. LRB cannot guarantee lower ping, force
+game-server routes, or manipulate matchmaking traffic.
+
+Official guide: [Rocket League connection diagnostics](https://www.epicgames.com/help/c-37599050/c-39065013/a18083748).
+
 ## Current capabilities
 
 | Subsystem | Status |
@@ -83,6 +125,8 @@ The launch command requests an Epic exchange code and supplies standard Epic lau
 | Epic library API query (Rust HTTPS) | Implemented; live response requires validation |
 | Local game registration, executable safety checks, diagnostics | Implemented; unit tested |
 | Epic `.item` install import for Rocket League | Implemented; parser unit tests added, real install still untested |
+| Native Epic online preflight (OAuth verify and exchange-code issuance) | Implemented; live account testing required |
+| Rust TCP network diagnostics (median, p95, variations and failures) | Implemented; not game-server ping |
 | Local game process spawning with Epic token and Wine option | Implemented; real Rocket League play not validated |
 | Game manifest download/parsing | Not implemented |
 | Parallel game installer, patching, full verification | Not implemented |
