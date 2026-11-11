@@ -1,6 +1,6 @@
 [package]
 name = "lrb"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["LegendaryRustBucket contributors"]
 description = "Native Rust Epic Games launcher foundation, optimized for Rocket League"

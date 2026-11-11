@@ -35,7 +35,26 @@ lrb library
 
 The browser sign-in uses Epic's normal webpage. Enter the authorization code locally; **never share it, your refresh token, or your saved session file**. Tokens are stored in your user configuration directory (`LRB_HOME` overrides the directory), with owner-only permissions on Unix. To remove the saved token, run `lrb auth logout`. Epic may update its OAuth flow or require additional account actions. Live authentication has **not** been tested with a real account in this milestone.
 
-## Register an existing Rocket League installation (experimental)
+## Import an existing Rocket League installation (native Rust)
+
+LRB can now read Epic Games Launcher's local `.item` installation manifest and automatically
+discover Rocket League's app ID, namespace, install location, and executable. No Python
+code or Legendary executable is involved; this does not install or update the game.
+
+```bash
+lrb import-egl
+lrb import-egl --manifest /path/to/manifest.item
+lrb import-egl --manifest /path/to/manifest.item --path /path/to/RocketLeague
+lrb import-egl --manifest /path/to/manifest.item --replace
+```
+
+On Windows, the default search uses `%PROGRAMDATA%/Epic/EpicGamesLauncher/Data/Manifests`.
+On Linux it uses `$WINEPREFIX/drive_c/ProgramData/Epic/EpicGamesLauncher/Data/Manifests`
+(or `~/.wine` when WINEPREFIX is unset). Pass `--path` for relocated installations or
+non-C: Wine drives. The importer refuses incomplete installs, traversal paths and
+unverified executables. Only Rocket League manifests are considered.
+
+## Register an existing Rocket League installation manually (experimental)
 
 LRB does not download or update the game yet. For an **existing, legitimately installed game**, register the app with its actual Epic `appName` and namespace (from your own authorized Epic account/metadata), and its installed executable:
 
@@ -63,6 +82,7 @@ The launch command requests an Epic exchange code and supplies standard Epic lau
 | Epic account authorization and token refresh (Rust HTTPS) | Implemented; account integration requires live testing |
 | Epic library API query (Rust HTTPS) | Implemented; live response requires validation |
 | Local game registration, executable safety checks, diagnostics | Implemented; unit tested |
+| Epic `.item` install import for Rocket League | Implemented; parser unit tests added, real install still untested |
 | Local game process spawning with Epic token and Wine option | Implemented; real Rocket League play not validated |
 | Game manifest download/parsing | Not implemented |
 | Parallel game installer, patching, full verification | Not implemented |

@@ -25,6 +25,8 @@ jobs:
         run: cargo test --all-targets
       - name: CLI smoke test
         run: cargo run -- help
+      - name: Importer help smoke test
+        run: cargo run -- import-egl --help
       - name: No Python source or bridge
         shell: bash
         run: |

@@ -1,5 +1,6 @@
 //! LRB: Rust-native launcher foundation. Never starts Python or Legendary.
 mod epic;
+mod egl;
 mod store;
 
 use std::env;
@@ -8,7 +9,7 @@ use std::process::{Command, ExitCode};
 use store::InstalledGame;
 
 const HELP: &str = "\
-LRB — LegendaryRustBucket v0.2.0 (100% Rust launcher foundation)
+LRB — LegendaryRustBucket v0.3.0 (100% Rust launcher foundation)
 
 Usage:
   lrb help
@@ -20,6 +21,8 @@ Usage:
   lrb auth logout                  Remove saved session
   lrb library                      Read Epic library through native Rust HTTPS
   lrb list                         List locally registered installs
+  lrb import-egl [--manifest FILE | --dir DIR] [--path DIR] [--replace]
+                                   Import an existing Epic installation
   lrb register --app ID --title NAME --path DIR --exe RELATIVE_EXE --namespace ID [--platform Windows|Linux]
   lrb launch [--app ID_OR_TITLE] [--wine WINE_PATH] [--dry-run]
   lrb verify [--app ID_OR_TITLE]   Check registered executable (not full file verification)
@@ -99,6 +102,23 @@ fn register(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn import_egl(args: &[String]) -> Result<(), String> {
+    if args.iter().any(|s| s == "--help") {
+        println!("Use: lrb import-egl [--manifest FILE | --dir DIR] [--path DIR] [--replace]");
+        println!("By default, scans Epic's .item manifests in PROGRAMDATA (Windows) or WINEPREFIX (Linux).");
+        return Ok(());
+    }
+    allowed_flags(args, &["--manifest", "--dir", "--path"], &["--replace"])?;
+    let manifest = get_flag(args, "--manifest")?.map(PathBuf::from);
+    let dir = get_flag(args, "--dir")?.map(PathBuf::from);
+    let path = get_flag(args, "--path")?.map(PathBuf::from);
+    let replace = args.iter().any(|s| s == "--replace");
+    let game = egl::import(manifest.as_deref(), dir.as_deref(), path.as_deref(), replace)?;
+    println!("Imported: {} | {} | {}", game.title, game.app_name, game.install_path.display());
+    println!("Next: lrb verify --app \"{}\"; lrb launch --dry-run", game.title);
+    Ok(())
+}
+
 fn launch(args: &[String]) -> Result<(), String> {
     allowed_flags(args, &["--app", "--wine"], &["--dry-run"])?;
     let game = select_game(args)?;
@@ -151,7 +171,7 @@ fn run() -> Result<(), String> {
         "help" | "--help" | "-h" => { println!("{HELP}"); Ok(()) }
         "doctor" => {
             allowed_flags(rest, &[], &[])?;
-            println!("LRB v0.2.0 / OS {} / Rust-native: yes", std::env::consts::OS);
+            println!("LRB v0.3.0 / OS {} / Rust-native: yes", std::env::consts::OS);
             println!("Data: {}", store::data_dir()?.display());
             println!("Registered games: {}", store::load_installed()?.len());
             println!("Epic online login present: {}", epic::load_session().is_ok());
@@ -175,6 +195,7 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         "register" => register(rest),
+        "import-egl" => import_egl(rest),
         "launch" => launch(rest),
         "verify" => {
             allowed_flags(rest, &["--app"], &[])?;
