@@ -200,3 +200,109 @@ mod tests {
         assert!(url.contains("clientId"));
     }
 }
+
+
+/// Network metadata for a legitimate Epic-owned Windows game installation.
+/// Token and signed CDN URL query strings are never written to stdout.
+pub struct DownloadPlan {
+    pub manifest: crate::manifest::Manifest,
+    pub bases: Vec<String>,
+    pub raw_manifest: Vec<u8>,
+    pub app_name: String,
+    pub namespace: String,
+}
+
+pub fn download_plan(selector: &str) -> Result<DownloadPlan, String> {
+    use sha1::{Digest, Sha1};
+    use std::io::Read;
+    let session = refreshed_session()?;
+    let client = http_client()?;
+    const LAUNCHER: &str = "https://launcher-public-service-prod06.ol.epicgames.com";
+    let response = client
+        .get(format!("{LAUNCHER}/launcher/api/public/assets/Windows"))
+        .bearer_auth(&session.access_token)
+        .query(&[("label", "Live")])
+        .send()
+        .map_err(|e| format!("Epic assets request failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Epic Windows game asset lookup returned HTTP {}", response.status()));
+    }
+    let assets: Value = response.json().map_err(|e| format!("Invalid Epic assets response: {e}"))?;
+    let records = assets.as_array().ok_or("Epic Windows game assets response was not an array")?;
+    let game = records.iter().find(|asset| {
+        let name = asset.get("appName").and_then(Value::as_str).unwrap_or_default();
+        name.eq_ignore_ascii_case(selector) ||
+        (selector.eq_ignore_ascii_case("Rocket League") && name.eq_ignore_ascii_case("Sugar"))
+    }).ok_or_else(|| format!("Game {selector:?} not available in Epic Windows game assets for this account"))?;
+    let field = |key: &str| -> Result<String, String> {
+        game.get(key).and_then(Value::as_str).filter(|s|!s.is_empty())
+            .map(str::to_owned).ok_or_else(|| format!("Epic game asset missing {key}"))
+    };
+    let app_name=field("appName")?;
+    let namespace=field("namespace")?;
+    let catalog=field("catalogItemId")?;
+    // The API returns signed/expiring CDN URLs. Do not reuse them from previous runs.
+    let mut url=reqwest::Url::parse(LAUNCHER).map_err(|e|e.to_string())?;
+    url.path_segments_mut().map_err(|_|"Invalid launcher URL")?.extend([
+        "launcher","api","public","assets","v2","platform","Windows",
+        "namespace",namespace.as_str(),"catalogItem",catalog.as_str(),
+        "app",app_name.as_str(),"label","Live"
+    ]);
+    let response=client.get(url).bearer_auth(&session.access_token)
+        .send().map_err(|e| format!("Epic manifest lookup failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Epic manifest lookup returned HTTP {}",response.status()));
+    }
+    let response:Value=response.json().map_err(|e|format!("Invalid Epic manifest response: {e}"))?;
+    let elements=response.get("elements").and_then(Value::as_array).ok_or("No Epic manifest elements")?;
+    let element=elements.first().ok_or("Epic returned an empty manifest list")?;
+    if element.get("isPreloaded").and_then(Value::as_bool)==Some(true) {
+        return Err("Epic reports a preloaded but not yet released build; installation is blocked".into());
+    }
+    let expected_hash=element.get("hash").and_then(Value::as_str)
+        .ok_or("Manifest API did not supply a SHA-1 hash")?.to_ascii_lowercase();
+    let manifests=element.get("manifests").and_then(Value::as_array)
+        .ok_or("Epic manifest URLs missing")?;
+    let mut bases=Vec::new();
+    let mut errors=Vec::new();
+    for entry in manifests {
+        let Some(uri)=entry.get("uri").and_then(Value::as_str) else {continue;};
+        let mut url=match reqwest::Url::parse(uri) {
+            Ok(url) if url.scheme()=="https" =>url,
+            _=>{errors.push("Ignored insecure/invalid CDN URI".to_string());continue;},
+        };
+        // Honor short-lived query parameters that Epic may include with signed CDN URLs.
+        if let Some(params)=entry.get("queryParams").and_then(Value::as_array) {
+            for param in params {
+                if let (Some(k),Some(v))=(param.get("name").and_then(Value::as_str),param.get("value").and_then(Value::as_str)) {
+                    url.query_pairs_mut().append_pair(k,v);
+                }
+            }
+        }
+        if let Some((base,_))=uri.rsplit_once('/') {
+            if !bases.iter().any(|b|b==base) {bases.push(base.to_string());}
+        }
+        let response=match client.get(url).send() {
+            Ok(response)=>response,
+            Err(e)=>{errors.push(format!("CDN manifest request failed: {e}"));continue;},
+        };
+        if !response.status().is_success() {
+            errors.push(format!("CDN manifest returned HTTP {}",response.status()));
+            continue;
+        }
+        let mut bytes=Vec::new();
+        let mut limited=response.take(128*1024*1024+1);
+        if limited.read_to_end(&mut bytes).is_err() || bytes.len()>128*1024*1024 {
+            errors.push("CDN manifest response too large or unreadable".into());continue;
+        }
+        let actual=hex::encode(Sha1::digest(&bytes));
+        if actual!=expected_hash {errors.push("CDN manifest SHA-1 mismatch".into());continue;}
+        let manifest=crate::manifest::parse(&bytes)?;
+        if !manifest.app_name.is_empty() && !manifest.app_name.eq_ignore_ascii_case(&app_name) {
+            return Err("Epic manifest AppName differs from authenticated asset".into());
+        }
+        if bases.is_empty() {return Err("No chunk CDN base URL was returned".into());}
+        return Ok(DownloadPlan{manifest,bases,raw_manifest:bytes,app_name,namespace});
+    }
+    Err(format!("Could not retrieve a valid Epic game manifest: {}",errors.join("; ")))
+}

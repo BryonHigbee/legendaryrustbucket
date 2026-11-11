@@ -1,6 +1,8 @@
 //! LRB: Rust-native launcher foundation. Never starts Python or Legendary.
 mod epic;
 mod egl;
+mod installer;
+mod manifest;
 mod network;
 mod store;
 
@@ -10,7 +12,7 @@ use std::process::{Command, ExitCode};
 use store::InstalledGame;
 
 const HELP: &str = "\
-LRB — LegendaryRustBucket v0.4.0 (100% Rust launcher foundation)
+LRB — LegendaryRustBucket v0.5.0 (100% Rust launcher foundation)
 
 Usage:
   lrb help
@@ -30,7 +32,13 @@ Usage:
   lrb online-check [--app ID_OR_TITLE]  Validate local install, Epic OAuth and launch-token issuance
   lrb net-probe --host HOST [--port 443] [--samples 8] [--timeout-ms 1250] [--json]
                                    Probe TCP connect RTT; NOT in-game ping
-  lrb install                      Not implemented; does NOT invoke Python
+  lrb install [--app ID] [--dir DIR] [--workers 1..16] [--dry-run]
+                                   Download/install Rocket League via native Rust Epic BuildPatch
+  lrb update [--app ID] [--workers 1..16] [--dry-run]
+                                   Fetch newest manifest; update changed files
+  lrb repair [--app ID] [--workers 1..16] [--dry-run]
+                                   Re-download files failing SHA-1 verification
+  lrb verify --full [--app ID]     Hash-check every game file against saved install manifest
 
 Environment:
   LRB_HOME                         Override user config directory
@@ -121,6 +129,36 @@ fn import_egl(args: &[String]) -> Result<(), String> {
     println!("Imported: {} | {} | {}", game.title, game.app_name, game.install_path.display());
     println!("Next: lrb verify --app \"{}\"; lrb launch --dry-run", game.title);
     Ok(())
+}
+
+fn install_options(args: &[String], existing: bool) -> Result<installer::InstallOptions, String> {
+    if args.iter().any(|arg| arg == "--help") {
+        println!("Use: lrb {} [--app NAME] {} [--workers 1..16] [--dry-run]",if existing {"update/repair"} else {"install"},
+            if existing {""} else {"[--dir DIR]"});
+        return Err("help requested".into());
+    }
+    allowed_flags(args, if existing {&["--app","--workers"]} else {&["--app","--dir","--workers"]}, &["--dry-run"])?;
+    let app=get_flag(args,"--app")?.unwrap_or_else(||"Rocket League".into());
+    let workers=get_flag(args,"--workers")?.unwrap_or_else(||"4".into())
+        .parse::<usize>().map_err(|_|"--workers must be an integer from 1 to 16")?;
+    let dir=if existing {
+        let games=store::load_installed()?;
+        let game=store::find_game(&games,&app)?;
+        Some(game.install_path.clone())
+    } else {
+        get_flag(args,"--dir")?.map(PathBuf::from)
+    };
+    Ok(installer::InstallOptions{app,dir,workers,dry_run:args.iter().any(|v|v=="--dry-run")})
+}
+
+fn run_install(args: &[String],existing:bool)->Result<(),String>{
+    if args.iter().any(|arg| arg == "--help") {
+        println!("Use: lrb {} [--app NAME] {} [--workers 1..16] [--dry-run]",
+            if existing {"update/repair"} else {"install"},
+            if existing {""} else {"[--dir DIR]"});
+        return Ok(());
+    }
+    installer::install(install_options(args,existing)?)
 }
 
 fn online_check(args: &[String]) -> Result<(), String> {
@@ -214,11 +252,11 @@ fn run() -> Result<(), String> {
         "help" | "--help" | "-h" => { println!("{HELP}"); Ok(()) }
         "doctor" => {
             allowed_flags(rest, &[], &[])?;
-            println!("LRB v0.4.0 / OS {} / Rust-native: yes", std::env::consts::OS);
+            println!("LRB v0.5.0 / OS {} / Rust-native: yes", std::env::consts::OS);
             println!("Data: {}", store::data_dir()?.display());
             println!("Registered games: {}", store::load_installed()?.len());
             println!("Epic online login present: {}", epic::load_session().is_ok());
-            println!("Downloader/patcher: not implemented. Compatibility with Rocket League online play: not validated.");
+            println!("Native BuildPatch installer/update/repair: implemented (encrypted payloads not yet supported). Online gameplay: not validated.");
             Ok(())
         }
         "auth" => match rest {
@@ -243,14 +281,19 @@ fn run() -> Result<(), String> {
         "net-probe" => net_probe(rest),
         "launch" => launch(rest),
         "verify" => {
-            allowed_flags(rest, &["--app"], &[])?;
+            allowed_flags(rest, &["--app"], &["--full"])?;
             let game = select_game(rest)?;
-            let path = store::executable_path(&game)?;
-            println!("Registered executable exists: {}", path.display());
-            println!("This is NOT a full file-hash/manifest verification.");
-            Ok(())
+            if rest.iter().any(|a|a=="--full") {
+                installer::verify(&game)
+            } else {
+                let path = store::executable_path(&game)?;
+                println!("Registered executable exists: {}", path.display());
+                println!("For full file-hash/manifest verification, use: lrb verify --full");
+                Ok(())
+            }
         }
-        "install" => Err("Native Rust game downloader and installer are not yet implemented; no Python fallback exists.".into()),
+        "install" => run_install(rest,false),
+        "update" | "repair" => run_install(rest,true),
         _ => Err(format!("Unknown subcommand '{command}'. Use 'lrb help'.")),
     }
 }

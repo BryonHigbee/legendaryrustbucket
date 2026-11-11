@@ -1,8 +1,8 @@
 <p align="center"><img src="assets/lrb-logo.svg" alt="LRB — LegendaryRustBucket rainbow rust bucket" width="300" /></p>
 <h1 align="center">LRB — LegendaryRustBucket</h1>
-<p align="center">An experimental, fully <strong>Rust-native</strong> Epic Games launcher foundation focused on Rocket League for Windows and Linux.</p>
+<p align="center">A native <strong>Rust</strong> Epic Games launcher project focused on Rocket League for Windows and Linux.</p>
 
-> **Development status — not a production-ready Rocket League replacement.** All active launcher source code is Rust. There is **no Python code, Python interpreter, or Legendary executable dependency**. Epic sign-in and native HTTP requests are implemented, but game installation, update/manifest processing, and full Rocket League online launch compatibility are **not yet finished or validated**. No claims of increased FPS, reduced ping, or improved launch time have been measured.
+> **Development status — not a production-ready Rocket League replacement.** All active launcher source code is Rust. There is **no Python code, Python interpreter, or Legendary executable dependency**. Epic sign-in and native HTTP requests are implemented, but native BuildPatch install/update/repair are implemented but **not yet validated with authenticated live Epic downloads**; encrypted manifests/chunks and full Rocket League online-launch compatibility are not yet supported or proven. No claims of increased FPS, reduced ping, or improved launch time have been measured.
 
 ## Rust-only architecture
 
@@ -22,6 +22,36 @@ cargo run -- doctor
 ```
 
 The resulting binary is `target/release/lrb` (Linux) or `target/release/lrb.exe` (Windows). Dependencies are Rust crates from crates.io, not the Python Legendary launcher.
+
+## Native Rocket League install, update, verify, repair (v0.5.0, experimental)
+
+With an authenticated Epic account, LRB now requests the Windows Rocket League assets
+and a signed BuildPatch manifest, validates its SHA-1, parses supported JSON/binary
+manifests, retrieves chunk files in Rust, checks integrity, assembles game files, and
+registers them only after completion. **No Python or Legendary executable is used.**
+
+```bat
+lrb auth
+lrb auth --code YOUR_CODE
+lrb install --dry-run
+lrb install --dir D:\Games\RocketLeague --workers 4
+lrb verify --full
+lrb update
+lrb repair
+```
+
+The default installation folder is the operating system user-local data directory under
+`LegendaryRustBucket/Games/RocketLeague`. Use `--dir` to choose a drive.
+An interrupted install keeps verified chunks for resumable retries, and the downloader
+reuses unchanged files based on their SHA-1 hashes. New/updated files are assembled
+to temporary files, verified, and then installed. It does not delete files that
+are absent from a new manifest. The chunk cache is removed after success.
+
+**Known limitations:** Encrypted BuildPatch manifests/chunks are rejected (rather than
+silently corrupted); installation API responses and Rocket League gameplay still
+require real-account end-to-end testing. Selective install tags, prerequisite installers,
+file-deletion patch optimizations, anti-cheat initialization and Epic ownership-token
+flows are not complete. It is an experimental installer, not a production replacement.
 
 ## Epic sign-in and library (experimental)
 
@@ -128,8 +158,8 @@ Official guide: [Rocket League connection diagnostics](https://www.epicgames.com
 | Native Epic online preflight (OAuth verify and exchange-code issuance) | Implemented; live account testing required |
 | Rust TCP network diagnostics (median, p95, variations and failures) | Implemented; not game-server ping |
 | Local game process spawning with Epic token and Wine option | Implemented; real Rocket League play not validated |
-| Game manifest download/parsing | Not implemented |
-| Parallel game installer, patching, full verification | Not implemented |
+| Game manifest retrieval and JSON/binary parser | Implemented; synthetic tests; live Epic not yet tested |
+| Parallel chunk download, SHA-1 verification, install, update and repair | Implemented; live Epic downloads not yet tested |
 | FPS/frame-time and ping optimizations | Not benchmarked; no performance claim |
 
 ## Benchmark policy and Rocket League anti-cheat

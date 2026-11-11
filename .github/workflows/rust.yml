@@ -31,6 +31,10 @@ jobs:
         run: cargo run -- online-check --help
       - name: Network probe help smoke test
         run: cargo run -- net-probe --help
+      - name: Native install CLI smoke test (help only, no Epic account)
+        run: cargo run -- install --help
+      - name: Native update CLI smoke test (help only)
+        run: cargo run -- update --help
       - name: No Python source or bridge
         shell: bash
         run: |
