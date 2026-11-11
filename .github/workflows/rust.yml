@@ -1,0 +1,41 @@
+name: Rust native build and tests
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  native-rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release launcher
+        run: cargo build --release
+      - name: Test Rust launcher
+        run: cargo test --all-targets
+      - name: CLI smoke test
+        run: cargo run -- help
+      - name: No Python source or bridge
+        shell: bash
+        run: |
+          test ! -d legendary
+          test ! -f pyproject.toml
+          ! grep -R -n 'Command::new("python\|Command::new("legendary' src || exit 1
+      - name: Upload launcher binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: lrb-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            target/release/lrb
+            target/release/lrb.exe
+          if-no-files-found: error
