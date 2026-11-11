@@ -1,0 +1,27 @@
+name: LRB Rust smoke tests
+on:
+  push:
+    paths:
+      - 'rust/lrb/**'
+      - '.github/workflows/lrb-rust.yml'
+  pull_request:
+    paths:
+      - 'rust/lrb/**'
+      - '.github/workflows/lrb-rust.yml'
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build (offline, no external crates)
+        run: cargo build --manifest-path rust/lrb/Cargo.toml --offline
+      - name: Unit tests
+        run: cargo test --manifest-path rust/lrb/Cargo.toml --offline
+      - name: CLI smoke test
+        run: cargo run --manifest-path rust/lrb/Cargo.toml --offline -- help

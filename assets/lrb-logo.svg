@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000" role="img" aria-label="LRB LegendaryRustBucket logo: white LRB text above a rainbow-painted rusty metal bucket">
+  <defs>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#404044"/><stop offset=".56" stop-color="#323236"/><stop offset="1" stop-color="#28282d"/></linearGradient>
+    <linearGradient id="metal" x1="0" y1="0" x2="1" y2=".8"><stop stop-color="#aab6be"/><stop offset=".29" stop-color="#58636d"/><stop offset=".52" stop-color="#c5c4bc"/><stop offset=".85" stop-color="#58646a"/><stop offset="1" stop-color="#252f37"/></linearGradient>
+    <linearGradient id="rainbow" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ff4d60"/><stop offset=".18" stop-color="#ffad39"/><stop offset=".34" stop-color="#ffe867"/><stop offset=".50" stop-color="#70e985"/><stop offset=".68" stop-color="#50dbea"/><stop offset=".83" stop-color="#7286ff"/><stop offset="1" stop-color="#c87fff"/></linearGradient>
+    <linearGradient id="rim" x1="0" x2="0" y1="0" y2="1"><stop stop-color="#e1e5e6"/><stop offset=".55" stop-color="#7d8b8d"/><stop offset="1" stop-color="#2c363e"/></linearGradient>
+    <clipPath id="bucket-clip"><path d="M336 575 664 575 612 811 Q610 825 591 825 H409 Q390 825 388 811Z"/></clipPath>
+  </defs>
+  <path d="M166 82 H375 Q388 82 394 103 Q404 132 441 132 H559 Q596 132 606 103 Q612 82 625 82 H834 Q918 82 918 166 V399 Q873 411 873 459 Q873 506 918 519 V834 Q918 918 834 918 H625 Q611 918 606 897 Q597 868 559 868 H441 Q403 868 394 897 Q388 918 375 918 H166 Q82 918 82 834 V519 Q127 506 127 459 Q127 411 82 399 V166 Q82 82 166 82Z" fill="url(#panel)" stroke="#17171a" stroke-width="8"/>
+  <path d="M164 110 H360 M642 110 H836 M164 891 H360 M642 891 H836" stroke="#77777c" stroke-width="3" opacity=".18" stroke-linecap="round"/>
+  <text x="500" y="356" font-family="DejaVu Sans, Arial, sans-serif" font-size="222" font-weight="900" text-anchor="middle" letter-spacing="-9" fill="#f1f1f2" stroke="#f1f1f2" stroke-width="2" paint-order="stroke">LRB</text>
+  <path d="M348 571 C350 434 650 434 652 571" fill="none" stroke="#161c26" stroke-width="33" stroke-linecap="round"/>
+  <path d="M349 571 C350 441 650 441 651 571" fill="none" stroke="url(#rainbow)" stroke-width="18" stroke-linecap="round"/>
+  <path d="M357 568 C371 463 629 463 643 568" fill="none" stroke="#f9f8f2" stroke-opacity=".38" stroke-width="3"/>
+  <path d="M336 575 664 575 612 811 Q610 825 591 825 H409 Q390 825 388 811Z" fill="url(#metal)" stroke="#171c21" stroke-width="13" stroke-linejoin="round"/>
+  <g clip-path="url(#bucket-clip)">
+    <path d="M325 593 674 593 667 643 334 643Z" fill="#f95a50" opacity=".93"/>
+    <path d="M330 630 668 630 656 680 346 680Z" fill="#ffb548" opacity=".92"/>
+    <path d="M346 675 660 675 646 715 354 715Z" fill="#7fdd83" opacity=".91"/>
+    <path d="M359 711 645 711 635 754 368 754Z" fill="#5fcfdf" opacity=".91"/>
+    <path d="M367 749 639 749 630 799 379 799Z" fill="#8b80e9" opacity=".92"/>
+    <path d="M330 587 Q347 601 361 599 Q374 612 386 597 L403 622 Q423 613 439 629 Q462 640 477 621 L504 640 Q526 621 539 640 Q552 641 570 629 L588 647 614 616 648 613 668 602 V582Z" fill="#a84e2c" opacity=".79"/>
+    <path d="M365 636 398 618 415 633 423 655 410 677 385 666 376 682 361 665ZM567 688 597 663 623 672 626 704 604 717 583 705ZM390 762 425 746 438 761 446 800 399 820 382 801ZM544 770 574 743 602 756 619 796 606 823 573 817 558 804Z" fill="#a34424" opacity=".91"/>
+    <path d="M375 631 394 640 388 652 370 656ZM594 682 615 687 610 702 591 706ZM408 772 427 782 416 796 397 788ZM576 782 593 777 605 796 589 803Z" fill="#df8741" opacity=".88"/>
+    <path d="M345 594 390 821 M641 596 601 822" stroke="#fff6ed" stroke-opacity=".23" stroke-width="7"/>
+    <path d="M386 804 Q492 820 620 802" fill="none" stroke="#253039" stroke-opacity=".65" stroke-width="13"/>
+  </g>
+  <path d="M330 567 Q500 550 670 567 L669 597 Q500 612 331 597Z" fill="url(#rim)" stroke="#1d242c" stroke-width="9" stroke-linejoin="round"/>
+  <path d="M349 575 Q501 563 648 575" fill="none" stroke="#edf3f4" stroke-width="5" opacity=".82"/>
+  <circle cx="365" cy="597" r="11" fill="#303942" stroke="#aeb8bc" stroke-width="5"/>
+  <circle cx="635" cy="597" r="11" fill="#303942" stroke="#aeb8bc" stroke-width="5"/>
+  <path d="M399 826 Q504 842 609 826" stroke="#121920" stroke-width="11" fill="none" stroke-linecap="round"/>
+  <text x="500" y="863" font-family="DejaVu Sans, Arial, sans-serif" font-size="25" font-weight="800" letter-spacing="4" text-anchor="middle" fill="#d6d7da">LEGENDARY RUST BUCKET</text>
+</svg>
